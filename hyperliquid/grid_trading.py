@@ -255,8 +255,9 @@ class GridTrading:
                     logger.info(f"第一单状态: {statuses[0]}")
                     
                     if "filled" in statuses[0]:
-                        filled_price = statuses[0]["filled"]["px"]
-                        filled_sz = statuses[0]["filled"]["sz"]
+                        #【修复】适配API变更：px -> avgPx, sz -> totalSz
+                        filled_price = statuses[0]["filled"]["avgPx"]
+                        filled_sz = statuses[0]["filled"]["totalSz"]
                         logger.info(f"✅ 第一单成交成功: 价格={filled_price}, 数量={filled_sz}")
                         # 立即挂对应的卖单
                         sell_price = self.round_to_step(float(filled_price) * (1 + self.tp))
@@ -270,7 +271,8 @@ class GridTrading:
 
                         logger.info(f"挂对应卖单: 价格={sell_price}, 数量={filled_sz}")
                         
-                        sell_order_result = self.exchange.order(self.COIN, False, filled_sz, sell_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
+                        #【修复】确保下单数量为float类型
+                        sell_order_result = self.exchange.order(self.COIN, False, float(filled_sz), sell_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
                         logger.info(f"对应卖单API响应: {sell_order_result}")
                         
                         if sell_order_result["status"] == "ok":
@@ -307,8 +309,9 @@ class GridTrading:
                     logger.info(f"第一单做空状态: {statuses[0]}")
                     
                     if "filled" in statuses[0]:
-                        filled_price = statuses[0]["filled"]["px"]
-                        filled_sz = statuses[0]["filled"]["sz"]
+                        #【修复】适配API变更：px -> avgPx, sz -> totalSz
+                        filled_price = statuses[0]["filled"]["avgPx"]
+                        filled_sz = statuses[0]["filled"]["totalSz"]
                         logger.info(f"✅ 第一单做空成交成功: 价格={filled_price}, 数量={filled_sz}")
                         # 立即挂对应的买单
                         cover_price = self.round_to_step(float(filled_price) * (1 - self.tp))
@@ -322,7 +325,8 @@ class GridTrading:
 
                         logger.info(f"挂对应买单: 价格={cover_price}, 数量={filled_sz}")
                         
-                        cover_order_result = self.exchange.order(self.COIN, True, filled_sz, cover_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
+                        #【修复】确保下单数量为float类型
+                        cover_order_result = self.exchange.order(self.COIN, True, float(filled_sz), cover_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
                         logger.info(f"对应买单API响应: {cover_order_result}")
                         
                         if cover_order_result["status"] == "ok":
