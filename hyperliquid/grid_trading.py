@@ -182,7 +182,7 @@ class GridTrading:
         pos = self.get_position()
         if pos > 0:
             logger.info(f"平多 {pos} {self.COIN}")
-            self.exchange.order(self.COIN, False, abs(pos), self.get_midprice(), {"limit": {"tif": "Gtc"}}, reduce_only=True)
+            self.exchange.order(self.COIN, False, abs(pos), self.get_midprice(), {"limit": {"tif": "Gtc"}})
 
     def compute(self):
         midprice = self.get_midprice()
@@ -281,7 +281,7 @@ class GridTrading:
                         logger.info(f"挂对应卖单: 价格={sell_price}, 数量={filled_sz}")
                         
                         #【修复】确保下单数量为float类型
-                        sell_order_result = self.exchange.order(self.COIN, False, float(filled_sz), sell_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
+                        sell_order_result = self.exchange.order(self.COIN, False, float(filled_sz), sell_price, {"limit": {"tif": "Gtc"}})
                         logger.info(f"对应卖单API响应: {sell_order_result}")
                         
                         if sell_order_result["status"] == "ok":
@@ -310,7 +310,7 @@ class GridTrading:
                 logger.info(f"第一单以现价 {midprice} (滑点后: {slippage_price}) 做空 {self.eachgridamount} {self.COIN}...")
                 logger.info(f"第一单做空参数: COIN={self.COIN}, 数量={self.eachgridamount}, 价格={slippage_price}, TIF=Ioc")
                 
-                order_result = self.exchange.order(self.COIN, False, self.eachgridamount, slippage_price, {"limit": {"tif": "Ioc"}}, reduce_only=False)
+                order_result = self.exchange.order(self.COIN, False, self.eachgridamount, slippage_price, {"limit": {"tif": "Ioc"}})
                 logger.info(f"第一单做空API响应: {order_result}")
                 
                 if order_result["status"] == "ok":
@@ -335,7 +335,7 @@ class GridTrading:
                         logger.info(f"挂对应买单: 价格={cover_price}, 数量={filled_sz}")
                         
                         #【修复】确保下单数量为float类型
-                        cover_order_result = self.exchange.order(self.COIN, True, float(filled_sz), cover_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
+                        cover_order_result = self.exchange.order(self.COIN, True, float(filled_sz), cover_price, {"limit": {"tif": "Gtc"}})
                         logger.info(f"对应买单API响应: {cover_order_result}")
                         
                         if cover_order_result["status"] == "ok":
@@ -383,7 +383,7 @@ class GridTrading:
             for i, price in enumerate(self.eachprice):
                 if price < midprice:
                     continue # 只挂高于等于中间价的卖单
-                order_result = self.exchange.order(self.COIN, False, self.eachgridamount, price, {"limit": {"tif": "Gtc"}}, reduce_only=False)
+                order_result = self.exchange.order(self.COIN, False, self.eachgridamount, price, {"limit": {"tif": "Gtc"}})
                 if order_result["status"] == "ok":
                     statuses = order_result["response"]["data"]["statuses"]
                     if "resting" in statuses[0]:
