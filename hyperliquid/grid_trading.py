@@ -242,12 +242,12 @@ class GridTrading:
         # 第一单以现价成交
         if self.enable_long_grid:
             try:
-                #【修复】对第一单价格进行取整，以符合交易所价格精度要求
-                first_order_price = self.round_to_step(midprice)
-                logger.info(f"第一单以现价 {midprice} (取整后: {first_order_price}) 成交 {self.eachgridamount} {self.COIN}...")
-                logger.info(f"第一单参数: COIN={self.COIN}, 数量={self.eachgridamount}, 价格={first_order_price}, TIF=Ioc")
+                #【修复】为了保证IOC订单立即成交，主动增加一个价格步长的滑点
+                slippage_price = self.round_to_step(midprice) + self.price_step
+                logger.info(f"第一单以现价 {midprice} (滑点后: {slippage_price}) 成交 {self.eachgridamount} {self.COIN}...")
+                logger.info(f"第一单参数: COIN={self.COIN}, 数量={self.eachgridamount}, 价格={slippage_price}, TIF=Ioc")
                 
-                order_result = self.exchange.order(self.COIN, True, self.eachgridamount, first_order_price, {"limit": {"tif": "Ioc"}})
+                order_result = self.exchange.order(self.COIN, True, self.eachgridamount, slippage_price, {"limit": {"tif": "Ioc"}})
                 logger.info(f"第一单API响应: {order_result}")
                 
                 if order_result["status"] == "ok":
@@ -294,12 +294,12 @@ class GridTrading:
         
         if self.enable_short_grid:
             try:
-                #【修复】对第一单价格进行取整，以符合交易所价格精度要求
-                first_order_price = self.round_to_step(midprice)
-                logger.info(f"第一单以现价 {midprice} (取整后: {first_order_price}) 做空 {self.eachgridamount} {self.COIN}...")
-                logger.info(f"第一单做空参数: COIN={self.COIN}, 数量={self.eachgridamount}, 价格={first_order_price}, TIF=Ioc")
+                #【修复】为了保证IOC订单立即成交，主动增加一个价格步长的滑点
+                slippage_price = self.round_to_step(midprice) - self.price_step
+                logger.info(f"第一单以现价 {midprice} (滑点后: {slippage_price}) 做空 {self.eachgridamount} {self.COIN}...")
+                logger.info(f"第一单做空参数: COIN={self.COIN}, 数量={self.eachgridamount}, 价格={slippage_price}, TIF=Ioc")
                 
-                order_result = self.exchange.order(self.COIN, False, self.eachgridamount, first_order_price, {"limit": {"tif": "Ioc"}}, reduce_only=False)
+                order_result = self.exchange.order(self.COIN, False, self.eachgridamount, slippage_price, {"limit": {"tif": "Ioc"}}, reduce_only=False)
                 logger.info(f"第一单做空API响应: {order_result}")
                 
                 if order_result["status"] == "ok":
