@@ -390,40 +390,54 @@ class GridTrading:
                     logger.error(f"❌ Short order failed: {order_result}")
 
     def _handle_filled_buy_order(self, order_index, buy_price):
+        logger.info(f"处理已成交买单, 网格索引: {order_index}, 价格: {buy_price}")
         self.stats['buy_count'] += 1
         self.stats['buy_volume'] += self.eachgridamount
         self.stats['realized_entry'] = self.stats.get('realized_entry', 0.0) + buy_price * self.eachgridamount
-        pos = self.get_position()
-        if pos >= self.eachgridamount:
-            sell_price = self.round_to_step(buy_price * (1 + self.tp))
-            
-            # 【重要风控】防止止盈价差过小导致在相同价位开平仓
-            if sell_price <= buy_price:
-                original_sell_price = sell_price
-                sell_price = self.round_to_step(buy_price + self.price_step)
-                logger.error(f"【严重警告】TP值({self.tp})过小，导致计算出的卖价({original_sell_price}) <= 买价({buy_price})。")
-                logger.error(f"为防止亏损，已强制将卖价调整为 {sell_price} (买价 + 一个价格步长)。请调大您的TP值！")
+        
+        # 【修复】移除下单前的持仓检查，以解决因API状态延迟导致无法挂出卖单的问题。
+        # 我们相信 query_order_by_oid 的 'filled' 状态，并直接尝试挂出对应的 reduce_only 卖单。
+        # 如果因状态延迟等原因实际没有持仓，交易所会拒绝这个 reduce_only 订单，这是安全的。
+        
+        sell_price = self.round_to_step(buy_price * (1 + self.tp))
+        
+        # 【重要风控】防止止盈价差过小导致在相同价位开平仓
+        if sell_price <= buy_price:
+            original_sell_price = sell_price
+            sell_price = self.round_to_step(buy_price + self.price_step)
+            logger.error(f"【严重警告】TP值({self.tp})过小，导致计算出的卖价({original_sell_price}) <= 买价({buy_price})。")
+            logger.error(f"为防止亏损，已强制将卖价调整为 {sell_price} (买价 + 一个价格步长)。请调大您的TP值！")
 
-            order_result = self.exchange.order(self.COIN, False, self.eachgridamount, sell_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
-            if order_result.get("status") == "ok":
-                statuses = order_result["response"]["data"].get("statuses", [])
-                if statuses and "resting" in statuses[0]:
-                    oid = statuses[0]["resting"]["oid"]
-                    logger.info(f"✅ Sell order placed at {sell_price}, oid: {oid}")
-                    self.sell_orders.append({"index": order_index, "oid": oid, "activated": True})
-                else:
-                    logger.warning(f"Sell order placement did not result in a resting order: {statuses}")
+        logger.info(f"为成交的买单挂出对应卖单: 价格={sell_price}, 数量={self.eachgridamount}")
+        order_result = self.exchange.order(self.COIN, False, self.eachgridamount, sell_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
+        if order_result.get("status") == "ok":
+            statuses = order_result["response"]["data"].get("statuses", [])
+            if statuses and "resting" in statuses[0]:
+                oid = statuses[0]["resting"]["oid"]
+                logger.info(f"✅ Sell order placed at {sell_price}, oid: {oid}")
+                self.sell_orders.append({"index": order_index, "oid": oid, "activated": True})
             else:
-                logger.error(f"❌ Sell order补充失败: {order_result}")
+                logger.warning(f"Sell order placement did not result in a resting order: {statuses}")
+                # 即使没有resting，也可能被立即filled或遇到其他情况，统一加入待重试列表确保鲁棒性
                 self.pending_orders_to_place.append({
                     "original_index": order_index,
                     "coin": self.COIN, "is_buy": False, "sz": self.eachgridamount,
                     "limit_px": sell_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True
                 })
+        else:
+            logger.error(f"❌ Sell order补充失败: {order_result}")
+            self.pending_orders_to_place.append({
+                "original_index": order_index,
+                "coin": self.COIN, "is_buy": False, "sz": self.eachgridamount,
+                "limit_px": sell_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True
+            })
 
     def _handle_filled_short_order(self, order_index, short_price):
+        logger.info(f"处理已成交做空单, 网格索引: {order_index}, 价格: {short_price}")
         self.stats['short_count'] += 1
         self.stats['short_volume'] += self.eachgridamount
+        
+        # 【修复】移除下单前的持仓检查
         cover_price = self.round_to_step(short_price * (1 - self.tp))
 
         # 【重要风控】防止止盈价差过小导致在相同价位开平仓
@@ -433,6 +447,7 @@ class GridTrading:
             logger.error(f"【严重警告】TP值({self.tp})过小，导致计算出的平仓买价({original_cover_price}) >= 开仓卖价({short_price})。")
             logger.error(f"为防止亏损，已强制将平仓买价调整为 {cover_price} (卖价 - 一个价格步长)。请调大您的TP值！")
 
+        logger.info(f"为成交的做空单挂出对应买单: 价格={cover_price}, 数量={self.eachgridamount}")
         order_result = self.exchange.order(self.COIN, True, self.eachgridamount, cover_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
         if order_result.get("status") == "ok":
             statuses = order_result["response"]["data"].get("statuses", [])
@@ -442,6 +457,11 @@ class GridTrading:
                 self.short_cover_orders.append({"index": order_index, "oid": oid, "activated": True})
             else:
                 logger.warning(f"Short cover placement did not result in a resting order: {statuses}")
+                self.pending_orders_to_place.append({
+                    "original_index": order_index,
+                    "coin": self.COIN, "is_buy": True, "sz": self.eachgridamount,
+                    "limit_px": cover_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True
+                })
         else:
             logger.error(f"❌ Short cover order补充失败: {order_result}")
             self.pending_orders_to_place.append({
