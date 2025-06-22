@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Jupyter
+.ipynb_checkpoints
+
+# VSCode
+.vscode/
+
+# 环境/依赖
+.env
+.venv
+venv/
+hyper_env310/
+
+# 日志/数据
+*.log
+*.csv
+*.sqlite3
+*.db
+*.pkl
+*.h5
+*.npy
+*.npz
+
+# 配置/密钥
+examples/config.json
+grid_config.json
+*.key
+*.pem
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 其他
+*.swp 

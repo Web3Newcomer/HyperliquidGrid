@@ -1,0 +1,9 @@
+eth-account>=0.8.0
+requests>=2.25.0
+websocket-client>=1.2.0
+pydantic>=2.0.0
+bitarray>=2.0.0
+cytoolz>=0.11.0
+hexbytes>=0.2.0
+msgpack>=1.0.0
+hyperliquid-python-sdk>=0.15.0 
