@@ -399,21 +399,50 @@ class GridTrading:
                         self.stats['buy_volume'] += self.eachgridamount
                         self.stats['realized_entry'] += float(statuses[0]["filled"]["avgPx"]) * self.eachgridamount
                         
-                        sell_price = self.eachprice[i + 1]
-                        logger.info(f"为立即成交的买单挂出对应卖单: 价格={sell_price}")
-                        sell_order_result = self.exchange.order(self.COIN, False, self.eachgridamount, sell_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
-                        if sell_order_result.get("status") == "ok":
-                            sell_statuses = sell_order_result["response"]["data"].get("statuses", [])
-                            if sell_statuses and "resting" in sell_statuses[0]:
-                                sell_oid = sell_statuses[0]["resting"]["oid"]
-                                logger.info(f"✅ 对应卖单已挂出: oid={sell_oid}")
-                                self.sell_orders.append({"index": i + 1, "oid": sell_oid, "activated": True})
-                            else:
-                                logger.warning(f"对应卖单挂出后状态异常: {sell_statuses}")
-                                self.pending_orders_to_place.append({"original_index": i + 1, "coin": self.COIN, "is_buy": False, "sz": self.eachgridamount, "limit_px": sell_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True})
+                        # 【终极修复】智能计算卖单价格，防止顶层买单成交后崩溃
+                        sell_price = 0
+                        buy_price = float(statuses[0]["filled"]["avgPx"])
+                        next_grid_index = i + 1
+
+                        if next_grid_index < len(self.eachprice):
+                            sell_price = self.eachprice[next_grid_index]
+                            logger.info(f"网格内部买单成交，在上一格 {sell_price} 挂出卖单")
                         else:
-                            logger.error(f"❌ 对应卖单挂出失败，加入重试队列: {sell_order_result}")
-                            self.pending_orders_to_place.append({"original_index": i + 1, "coin": self.COIN, "is_buy": False, "sz": self.eachgridamount, "limit_px": sell_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True})
+                            # 这是最顶层的买单，使用TP比例来计算卖价
+                            sell_price = self.round_to_step(buy_price * (1 + self.tp))
+                            logger.info(f"网格顶层买单成交，使用止盈比例 {self.tp} 计算卖价: {sell_price}")
+
+                        # 统一风控：确保卖价 > 买价
+                        if sell_price <= buy_price:
+                            original_sell_price = sell_price
+                            sell_price = self.round_to_step(buy_price + self.price_step)
+                            logger.error(f"【严重警告】计算出的卖价({original_sell_price}) <= 买价({buy_price})。")
+                            logger.error(f"为防止亏损，已强制将卖价调整为 {sell_price} (买价 + 一个价格步长)。")
+
+                        logger.info(f"准备挂出卖单: 价格={sell_price}, 数量={self.eachgridamount}")
+                        order_result = self.exchange.order(self.COIN, False, self.eachgridamount, sell_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
+                        logger.info(f"卖单挂单结果: {order_result}")
+                        
+                        if order_result.get("status") == "ok":
+                            statuses = order_result["response"]["data"].get("statuses", [])
+                            if statuses and "resting" in statuses[0]:
+                                oid = statuses[0]["resting"]["oid"]
+                                logger.info(f"✅ 买单成交，挂出卖单 价格:{sell_price} oid:{oid}")
+                                self.sell_orders.append({"index": i + 1, "oid": oid, "activated": True})
+                            else:
+                                logger.warning(f"卖单挂出后状态异常: {statuses}")
+                                self.pending_orders_to_place.append({
+                                    "original_index": i + 1,
+                                    "coin": self.COIN, "is_buy": False, "sz": self.eachgridamount,
+                                    "limit_px": sell_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True
+                                })
+                        else:
+                            logger.error(f"❌ 卖单补充失败: {order_result}")
+                            self.pending_orders_to_place.append({
+                                "original_index": i + 1,
+                                "coin": self.COIN, "is_buy": False, "sz": self.eachgridamount,
+                                "limit_px": sell_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True
+                            })
                     else:
                         logger.warning(f"Unknown order status: {statuses[0]}")
                 else:
@@ -438,21 +467,47 @@ class GridTrading:
                         self.stats['short_count'] += 1
                         self.stats['short_volume'] += self.eachgridamount
                         
-                        cover_price = self.eachprice[i - 1]
-                        logger.info(f"为立即成交的做空单挂出对应买单: 价格={cover_price}")
-                        cover_order_result = self.exchange.order(self.COIN, True, self.eachgridamount, cover_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
-                        if cover_order_result.get("status") == "ok":
-                            cover_statuses = cover_order_result["response"]["data"].get("statuses", [])
-                            if cover_statuses and "resting" in cover_statuses[0]:
-                                cover_oid = cover_statuses[0]["resting"]["oid"]
-                                logger.info(f"✅ 对应买单已挂出: oid={cover_oid}")
-                                self.short_cover_orders.append({"index": i - 1, "oid": cover_oid, "activated": True})
-                            else:
-                                logger.warning(f"对应买单挂出后状态异常: {cover_statuses}")
-                                self.pending_orders_to_place.append({"original_index": i - 1, "coin": self.COIN, "is_buy": True, "sz": self.eachgridamount, "limit_px": cover_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True})
+                        # 【终极修复】智能计算买单价格，防止顶层卖单成交后崩溃
+                        cover_price = 0
+                        short_price = float(statuses[0]["filled"]["avgPx"])
+                        prev_grid_index = i - 1
+
+                        if prev_grid_index >= 0:
+                            cover_price = self.eachprice[prev_grid_index]
+                            logger.info(f"网格内部卖单成交，在下一格 {cover_price} 挂出平仓买单")
                         else:
-                            logger.error(f"❌ 对应买单挂出失败，加入重试队列: {cover_order_result}")
-                            self.pending_orders_to_place.append({"original_index": i - 1, "coin": self.COIN, "is_buy": True, "sz": self.eachgridamount, "limit_px": cover_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True})
+                            # 这是最底层的卖单，使用TP比例来计算平仓价
+                            cover_price = self.round_to_step(short_price * (1 - self.tp))
+                            logger.info(f"网格底层卖单成交，使用止盈比例 {self.tp} 计算平仓价: {cover_price}")
+                        
+                        # 统一风控：确保平仓价 < 开仓价
+                        if cover_price >= short_price:
+                            original_cover_price = cover_price
+                            cover_price = self.round_to_step(short_price - self.price_step)
+                            logger.error(f"【严重警告】计算出的平仓价({original_cover_price}) >= 开仓价({short_price})。")
+                            logger.error(f"为防止亏损，已强制将平仓价调整为 {cover_price} (开仓价 - 一个价格步长)。")
+
+                        order_result = self.exchange.order(self.COIN, True, self.eachgridamount, cover_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
+                        if order_result.get("status") == "ok":
+                            statuses = order_result["response"]["data"].get("statuses", [])
+                            if statuses and "resting" in statuses[0]:
+                                oid = statuses[0]["resting"]["oid"]
+                                logger.info(f"✅ 做空单成交，挂出平仓单 价格:{cover_price} oid:{oid}")
+                                self.short_cover_orders.append({"index": i - 1, "oid": oid, "activated": True})
+                            else:
+                                logger.warning(f"做空平仓单挂出后状态异常: {statuses}")
+                                self.pending_orders_to_place.append({
+                                    "original_index": i - 1,
+                                    "coin": self.COIN, "is_buy": True, "sz": self.eachgridamount,
+                                    "limit_px": cover_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True
+                                })
+                        else:
+                            logger.error(f"❌ 做空平仓单补充失败: {order_result}")
+                            self.pending_orders_to_place.append({
+                                "original_index": i - 1,
+                                "coin": self.COIN, "is_buy": True, "sz": self.eachgridamount,
+                                "limit_px": cover_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True
+                            })
                     else:
                         logger.warning(f"Unknown order status: {statuses[0]}")
                 else:
@@ -483,8 +538,26 @@ class GridTrading:
                             self.stats['buy_volume'] += self.eachgridamount
                             self.stats['realized_entry'] += float(order_status['order']['avgPx']) * self.eachgridamount
                             
-                            # 买单成交后，挂出卖单
-                            sell_price = self.eachprice[buy_order["index"] + 1]
+                            # 【终极修复】智能计算卖单价格，防止顶层买单成交后崩溃
+                            sell_price = 0
+                            buy_price = float(order_status['order']['avgPx'])
+                            next_grid_index = buy_order["index"] + 1
+
+                            if next_grid_index < len(self.eachprice):
+                                sell_price = self.eachprice[next_grid_index]
+                                logger.info(f"网格内部买单成交，在上一格 {sell_price} 挂出卖单")
+                            else:
+                                # 这是最顶层的买单，使用TP比例来计算卖价
+                                sell_price = self.round_to_step(buy_price * (1 + self.tp))
+                                logger.info(f"网格顶层买单成交，使用止盈比例 {self.tp} 计算卖价: {sell_price}")
+
+                            # 统一风控：确保卖价 > 买价
+                            if sell_price <= buy_price:
+                                original_sell_price = sell_price
+                                sell_price = self.round_to_step(buy_price + self.price_step)
+                                logger.error(f"【严重警告】计算出的卖价({original_sell_price}) <= 买价({buy_price})。")
+                                logger.error(f"为防止亏损，已强制将卖价调整为 {sell_price} (买价 + 一个价格步长)。")
+
                             logger.info(f"准备挂出卖单: 价格={sell_price}, 数量={self.eachgridamount}")
                             order_result = self.exchange.order(self.COIN, False, self.eachgridamount, sell_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
                             logger.info(f"卖单挂单结果: {order_result}")
@@ -545,12 +618,12 @@ class GridTrading:
                                 if statuses and "resting" in statuses[0]:
                                     oid = statuses[0]["resting"]["oid"]
                                     logger.info(f"✅ 新买单已挂出 oid:{oid}")
-                                    self.buy_orders.append({"index": sell_order["index"], "oid": oid, "activated": True})
+                                    self.buy_orders.append({"index": buy_price_index, "oid": oid, "activated": True})
                                 else:
                                     logger.warning(f"新买单挂出后状态异常: {statuses}")
                                     # 加入待重试列表
                                     self.pending_orders_to_place.append({
-                                        "original_index": sell_order["index"],
+                                        "original_index": buy_price_index,
                                         "coin": self.COIN, "is_buy": True, "sz": self.eachgridamount,
                                         "limit_px": original_buy_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": False
                                     })
@@ -558,7 +631,7 @@ class GridTrading:
                                 logger.error(f"❌ 新买单补充失败: {order_result}")
                                 # 加入待重试列表
                                 self.pending_orders_to_place.append({
-                                    "original_index": sell_order["index"],
+                                    "original_index": buy_price_index,
                                     "coin": self.COIN, "is_buy": True, "sz": self.eachgridamount,
                                     "limit_px": original_buy_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": False
                                 })
@@ -580,7 +653,25 @@ class GridTrading:
                             self.stats['short_volume'] += self.eachgridamount
                             
                             # 做空单成交后，挂出平仓单
-                            cover_price = self.eachprice[short_order["index"] - 1]
+                            cover_price = 0
+                            short_price = float(order_status['order']['avgPx'])
+                            prev_grid_index = short_order["index"] - 1
+
+                            if prev_grid_index >= 0:
+                                cover_price = self.eachprice[prev_grid_index]
+                                logger.info(f"网格内部卖单成交，在下一格 {cover_price} 挂出平仓买单")
+                            else:
+                                # 这是最底层的卖单，使用TP比例来计算平仓价
+                                cover_price = self.round_to_step(short_price * (1 - self.tp))
+                                logger.info(f"网格底层卖单成交，使用止盈比例 {self.tp} 计算平仓价: {cover_price}")
+                            
+                            # 统一风控：确保平仓价 < 开仓价
+                            if cover_price >= short_price:
+                                original_cover_price = cover_price
+                                cover_price = self.round_to_step(short_price - self.price_step)
+                                logger.error(f"【严重警告】计算出的平仓价({original_cover_price}) >= 开仓价({short_price})。")
+                                logger.error(f"为防止亏损，已强制将平仓价调整为 {cover_price} (开仓价 - 一个价格步长)。")
+
                             order_result = self.exchange.order(self.COIN, True, self.eachgridamount, cover_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
                             if order_result.get("status") == "ok":
                                 statuses = order_result["response"]["data"].get("statuses", [])
@@ -638,7 +729,7 @@ class GridTrading:
                                 if statuses and "resting" in statuses[0]:
                                     oid = statuses[0]["resting"]["oid"]
                                     logger.info(f"✅ 新做空单已挂出 oid:{oid}")
-                                    self.short_orders.append({"index": cover_order["index"], "oid": oid, "activated": True})
+                                    self.short_orders.append({"index": short_price_index, "oid": oid, "activated": True})
                                 else:
                                     logger.warning(f"新做空单挂出后状态异常: {statuses}")
                                     # 加入待重试列表
