@@ -124,9 +124,19 @@ class GridTrading:
             return self.ws_midprice
         else:
             try:
-                # 降级到REST API
                 l2_data = self.info.l2_snapshot(self.COIN)
-                return (l2_data['levels'][0][0] + l2_data['levels'][0][1]) / 2
+                levels = l2_data['levels']
+                logger.info(f"l2_data['levels']: {levels}")
+                # 兼容不同结构
+                bid = levels[0][0]
+                ask = levels[0][1]
+                # 如果是dict，取'px'字段
+                if isinstance(bid, dict):
+                    bid = bid.get('px')
+                if isinstance(ask, dict):
+                    ask = ask.get('px')
+                mid = (float(bid) + float(ask)) / 2
+                return mid
             except Exception as e:
                 logger.warning(f"获取midprice失败: {e}")
                 return None
