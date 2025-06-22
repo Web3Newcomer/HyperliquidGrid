@@ -182,7 +182,16 @@ class GridTrading:
         # 使用更精确的舍入方法
         rounded = round(price / self.tick_size) * self.tick_size
         # 再次确保精度，避免浮点数误差
-        return round(rounded, 8)
+        final_price = round(rounded, 8)
+        
+        # 验证价格是否能被tick_size整除
+        if abs(final_price % self.tick_size) > 1e-10:
+            logger.warning(f"价格 {final_price} 不能被 tick_size {self.tick_size} 整除，重新调整")
+            # 强制调整到最近的tick_size倍数
+            final_price = round(final_price / self.tick_size) * self.tick_size
+            final_price = round(final_price, 8)
+        
+        return final_price
 
     def get_midprice(self):
         if hasattr(self, 'ws_midprice') and self.ws_midprice is not None:
@@ -229,12 +238,20 @@ class GridTrading:
         pricestep = (self.gridmax - self.gridmin) / self.gridnum
         self.eachprice = []
         
+        logger.info(f"计算网格价格: tick_size={self.tick_size}, 价格步长={pricestep}")
+        
         for i in range(self.gridnum + 1):
             # 计算原始价格
             raw_price = self.gridmin + i * pricestep
             # 四舍五入到tick_size
             rounded_price = self.round_to_tick_size(raw_price)
+            
+            # 验证价格
+            if abs(rounded_price % self.tick_size) > 1e-10:
+                logger.error(f"网格 {i}: 原始价格={raw_price}, 四舍五入后={rounded_price}, 不能被tick_size={self.tick_size}整除")
+            
             self.eachprice.append(rounded_price)
+            logger.debug(f"网格 {i}: {raw_price} -> {rounded_price}")
 
         logger.info(f"Grid levels: {self.eachprice}")
         
