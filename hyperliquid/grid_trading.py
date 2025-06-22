@@ -175,9 +175,14 @@ class GridTrading:
             return 1.0
 
     def round_to_tick_size(self, price: float) -> float:
-        """将价格四舍五入到最接近的tick_size"""
-        if self.tick_size == 0: return price
-        return round(price / self.tick_size) * self.tick_size
+        """将价格四舍五入到最接近的tick_size，避免浮点数精度问题"""
+        if self.tick_size == 0: 
+            return round(price, 8)  # 限制小数位数
+        
+        # 使用更精确的舍入方法
+        rounded = round(price / self.tick_size) * self.tick_size
+        # 再次确保精度，避免浮点数误差
+        return round(rounded, 8)
 
     def get_midprice(self):
         if hasattr(self, 'ws_midprice') and self.ws_midprice is not None:
@@ -220,8 +225,16 @@ class GridTrading:
             self.gridmin = midprice - price_range
             logger.info(f"自动设置网格区间 gridmin={self.gridmin:.6f}, gridmax={self.gridmax:.6f}")
         
+        # 使用更精确的网格价格计算
         pricestep = (self.gridmax - self.gridmin) / self.gridnum
-        self.eachprice = [self.round_to_tick_size(self.gridmin + i * pricestep) for i in range(self.gridnum + 1)]
+        self.eachprice = []
+        
+        for i in range(self.gridnum + 1):
+            # 计算原始价格
+            raw_price = self.gridmin + i * pricestep
+            # 四舍五入到tick_size
+            rounded_price = self.round_to_tick_size(raw_price)
+            self.eachprice.append(rounded_price)
 
         logger.info(f"Grid levels: {self.eachprice}")
         
