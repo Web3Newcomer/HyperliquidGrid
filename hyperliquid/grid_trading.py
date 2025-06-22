@@ -113,15 +113,65 @@ class GridTrading:
         """从交易所信息中动态获取指定币种的tick_size"""
         try:
             raw_meta = self.info.meta()
-            universe = raw_meta["universe"]
-            asset_index = next((i for i, asset in enumerate(universe) if asset["name"] == coin), None)
-            if asset_index is not None:
-                return float(raw_meta["assetCtxs"][asset_index]["tickSize"])
-            else:
-                logger.warning(f"无法为 {coin} 找到tick_size，默认使用 1.0")
-                return 1.0
+            logger.debug(f"API返回的meta数据结构: {list(raw_meta.keys())}")
+            
+            # 尝试不同的数据结构
+            if "universe" in raw_meta and "assetCtxs" in raw_meta:
+                universe = raw_meta["universe"]
+                asset_index = next((i for i, asset in enumerate(universe) if asset["name"] == coin), None)
+                if asset_index is not None:
+                    tick_size = float(raw_meta["assetCtxs"][asset_index]["tickSize"])
+                    logger.info(f"成功获取 {coin} 的 tick_size: {tick_size}")
+                    return tick_size
+            
+            # 尝试其他可能的数据结构
+            if "universe" in raw_meta:
+                for asset in raw_meta["universe"]:
+                    if asset.get("name") == coin:
+                        if "tickSize" in asset:
+                            tick_size = float(asset["tickSize"])
+                            logger.info(f"从universe中获取 {coin} 的 tick_size: {tick_size}")
+                            return tick_size
+                        elif "tick_size" in asset:
+                            tick_size = float(asset["tick_size"])
+                            logger.info(f"从universe中获取 {coin} 的 tick_size: {tick_size}")
+                            return tick_size
+            
+            # 如果都找不到，使用常见币种的默认值
+            default_tick_sizes = {
+                "BTC": 0.1,
+                "ETH": 0.01,
+                "SOL": 0.01,
+                "HYPE": 0.001,
+                "USDC": 0.0001
+            }
+            
+            if coin in default_tick_sizes:
+                tick_size = default_tick_sizes[coin]
+                logger.warning(f"使用 {coin} 的默认 tick_size: {tick_size}")
+                return tick_size
+            
+            logger.warning(f"无法为 {coin} 找到tick_size，使用默认值 1.0")
+            return 1.0
+            
         except Exception as e:
-            logger.error(f"获取 {coin} 的tick_size时发生错误: {e}, 默认使用 1.0")
+            logger.error(f"获取 {coin} 的tick_size时发生错误: {e}")
+            logger.debug(f"完整的meta数据: {raw_meta}")
+            
+            # 错误时也尝试使用默认值
+            default_tick_sizes = {
+                "BTC": 0.1,
+                "ETH": 0.01,
+                "SOL": 0.01,
+                "HYPE": 0.001,
+                "USDC": 0.0001
+            }
+            
+            if coin in default_tick_sizes:
+                tick_size = default_tick_sizes[coin]
+                logger.warning(f"错误后使用 {coin} 的默认 tick_size: {tick_size}")
+                return tick_size
+            
             return 1.0
 
     def round_to_tick_size(self, price: float) -> float:
@@ -196,7 +246,8 @@ class GridTrading:
             self._last_check_time = 0
         
         current_time = time.time()
-        if current_time - self._last_check_time < 2:
+        # 增加检查间隔到5秒，减少API调用频率
+        if current_time - self._last_check_time < 5:
             return
         self._last_check_time = current_time
 
