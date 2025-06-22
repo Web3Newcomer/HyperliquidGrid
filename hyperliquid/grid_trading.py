@@ -214,10 +214,12 @@ class GridTrading:
 
         # 自动设置网格区间
         if self.gridmin is None or self.gridmax is None:
-            price_range = midprice * 0.1 # 默认范围10%
+            # 使用grid_ratio参数，如果没有设置则使用默认值0.1
+            grid_ratio = getattr(self, 'grid_ratio', 0.1)
+            price_range = midprice * grid_ratio
             self.gridmax = midprice + price_range
             self.gridmin = midprice - price_range
-            logger.info(f"自动设置网格区间 gridmin={self.gridmin:.6f}, gridmax={self.gridmax:.6f}")
+            logger.info(f"自动设置网格区间 gridmin={self.gridmin:.6f}, gridmax={self.gridmax:.6f}, grid_ratio={grid_ratio}")
         
         # 使用更精确的网格价格计算
         pricestep = (self.gridmax - self.gridmin) / self.gridnum
