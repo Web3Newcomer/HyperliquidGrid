@@ -175,16 +175,17 @@ class GridTrading:
             return 1.0
 
     def round_to_tick_size(self, price: float) -> float:
-        """将价格四舍五入到最接近的tick_size，避免浮点数精度问题"""
+        """将价格四舍五入到最接近的tick_size"""
         if self.tick_size == 0: 
-            return round(price, 8)  # 限制小数位数
+            return round(price, 8)
         
-        # 使用更精确的舍入方法
-        rounded = round(price / self.tick_size) * self.tick_size
-        # 再次确保精度，避免浮点数误差
-        final_price = round(rounded, 8)
+        # 简单可靠的方法：先除以tick_size，四舍五入到整数，再乘以tick_size
+        steps = round(price / self.tick_size)
+        result = steps * self.tick_size
         
-        return final_price
+        # 确保结果的小数位数不超过tick_size的小数位数
+        tick_decimals = len(str(self.tick_size).split('.')[-1]) if '.' in str(self.tick_size) else 0
+        return round(result, tick_decimals)
 
     def get_midprice(self):
         if hasattr(self, 'ws_midprice') and self.ws_midprice is not None:
