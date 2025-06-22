@@ -57,8 +57,7 @@ def load_grid_config():
         "total_invest": None,
         "price_step": None,
         "grid_ratio": None,
-        "centered": False,
-        "rebalance_interval": 1800
+        "centered": False
     }
     if os.path.exists(GRID_CONFIG_PATH):
         with open(GRID_CONFIG_PATH, "r") as f:
@@ -79,27 +78,26 @@ def log_grid_status(trading):
     if trading.enable_long_grid:
         logger.info(f"[网格监控] 做多买单状态:")
         for order in trading.buy_orders:
-            status = '激活' if order['activated'] else '未激活'
-            logger.info(f"  网格{order['index']} 价格: {trading.eachprice[order['index']]} oid: {order['oid']} 状态: {status}")
+            logger.info(f"  网格{order['index']} 价格: {trading.eachprice[order['index']]} oid: {order['oid']}")
         logger.info(f"[网格监控] 做多卖单状态:")
         for order in trading.sell_orders:
-            status = '激活' if order['activated'] else '未激活'
-            logger.info(f"  网格{order['index']} 价格: {trading.round_to_step(trading.eachprice[order['index']] + trading.tp)} oid: {order['oid']} 状态: {status}")
+            # 计算卖单的止盈价格
+            tp_price = trading.round_to_tick_size(trading.eachprice[order['index']] * (1 + trading.tp))
+            logger.info(f"  网格{order['index']} 价格: {tp_price} oid: {order['oid']}")
 
     if trading.enable_short_grid:
         logger.info(f"[网格监控] 做空卖单状态:")
         for order in trading.short_orders:
-            status = '激活' if order['activated'] else '未激活'
-            logger.info(f"  网格{order['index']} 价格: {trading.eachprice[order['index']]} oid: {order['oid']} 状态: {status}")
+            logger.info(f"  网格{order['index']} 价格: {trading.eachprice[order['index']]} oid: {order['oid']}")
         logger.info(f"[网格监控] 做空买单状态:")
         for order in trading.short_cover_orders:
-            status = '激活' if order['activated'] else '未激活'
-            logger.info(f"  网格{order['index']} 价格: {trading.round_to_step(trading.eachprice[order['index']] - trading.tp)} oid: {order['oid']} 状态: {status}")
+            # 计算平空单的止盈价格
+            tp_price = trading.round_to_tick_size(trading.eachprice[order['index']] * (1 - trading.tp))
+            logger.info(f"  网格{order['index']} 价格: {tp_price} oid: {order['oid']}")
 
 def main():
     private_key, address = load_account_config()
     grid_cfg = load_grid_config()
-    rebalance_interval = grid_cfg.get("rebalance_interval", 3600)
     # 自动重试机制
     for i in range(3):
         try:
@@ -140,18 +138,12 @@ def main():
     )
     trading.compute()
     last_log_time = time.time()
-    rebalance_time = time.time()
     while True:
         trading.trader()
         now = time.time()
         if now - last_log_time >= 60:
             log_grid_status(trading)
             last_log_time = now
-        # 每rebalance_interval秒再平衡
-        if now - rebalance_time >= rebalance_interval:
-            logger.info(f"[定时] 触发再平衡，周期{rebalance_interval}s ...")
-            trading.rebalance()
-            rebalance_time = now
         time.sleep(2)
 
 if __name__ == "__main__":
