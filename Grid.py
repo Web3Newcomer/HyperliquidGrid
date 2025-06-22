@@ -114,6 +114,28 @@ def main():
     else:
         logger.error('多次重试后依然无法连接，请检查网络环境或VPN！')
         exit(1)
+
+    # 取消所有现存订单，确保从一个干净的状态开始
+    try:
+        logger.info(f"正在检查并取消币种 {grid_cfg['COIN']} 的所有现存挂单...")
+        open_orders = info.open_orders(address)
+        orders_to_cancel = [
+            {"coin": o["coin"], "oid": o["oid"]}
+            for o in open_orders
+            if o["coin"] == grid_cfg["COIN"]
+        ]
+        if orders_to_cancel:
+            logger.warning(f"发现 {len(orders_to_cancel)} 个现存挂单，正在取消...")
+            exchange.bulk_cancel(orders_to_cancel)
+            time.sleep(1) # 等待交易所处理
+            logger.info("所有现存挂单已成功取消。")
+        else:
+            logger.info("没有发现现存挂单，干净启动。")
+    except Exception as e:
+        logger.error(f"取消现存挂单时发生错误: {e}。请手动检查交易所。")
+        # 为安全起见，可以选择退出
+        # exit(1)
+
     all_mids = info.all_mids()
     logger.info("可用币种如下：")
     logger.info(list(all_mids.keys()))

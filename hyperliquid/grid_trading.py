@@ -300,6 +300,11 @@ class GridTrading:
                         # 经典循环网格：买单成交，挂出卖单平仓；卖单成交，挂出买单开仓
                         # 在买单成交价之上增加一个固定的止盈价差来挂卖单
                         sell_price = self.round_to_tick_size(buy_price * (1 + self.tp))
+                        
+                        logger.info(f"【下单决策】买单 {oid} 成交于 {buy_price}。")
+                        logger.info(f"【下单决策】根据止盈率 {self.tp}，计算目标卖价: {buy_price} * (1 + {self.tp}) = {buy_price * (1 + self.tp)}")
+                        logger.info(f"【下单决策】四舍五入后，最终止盈卖价为: {sell_price}")
+
 
                         if sell_price <= buy_price:
                             original_sell_price = sell_price
