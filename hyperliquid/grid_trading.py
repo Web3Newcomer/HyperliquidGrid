@@ -182,7 +182,7 @@ class GridTrading:
         pos = self.get_position()
         if pos > 0:
             logger.info(f"平多 {pos} {self.COIN}")
-            self.exchange.order(self.COIN, False, abs(pos), self.get_midprice(), {"limit": {"tif": "Gtc"}})
+            self.exchange.order(self.COIN, False, abs(pos), self.get_midprice(), {"limit": {"tif": "Gtc"}}, reduce_only=True)
 
     def compute(self):
         midprice = self.get_midprice()
@@ -280,8 +280,8 @@ class GridTrading:
 
                         logger.info(f"挂对应卖单: 价格={sell_price}, 数量={filled_sz}")
                         
-                        #【修复】确保下单数量为float类型
-                        sell_order_result = self.exchange.order(self.COIN, False, float(filled_sz), sell_price, {"limit": {"tif": "Gtc"}})
+                        #【修复】确保下单数量为float类型并设为只减仓
+                        sell_order_result = self.exchange.order(self.COIN, False, float(filled_sz), sell_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
                         logger.info(f"对应卖单API响应: {sell_order_result}")
                         
                         if sell_order_result["status"] == "ok":
@@ -334,8 +334,8 @@ class GridTrading:
 
                         logger.info(f"挂对应买单: 价格={cover_price}, 数量={filled_sz}")
                         
-                        #【修复】确保下单数量为float类型
-                        cover_order_result = self.exchange.order(self.COIN, True, float(filled_sz), cover_price, {"limit": {"tif": "Gtc"}})
+                        #【修复】确保下单数量为float类型并设为只减仓
+                        cover_order_result = self.exchange.order(self.COIN, True, float(filled_sz), cover_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
                         logger.info(f"对应买单API响应: {cover_order_result}")
                         
                         if cover_order_result["status"] == "ok":
@@ -426,7 +426,7 @@ class GridTrading:
                             # 买单成交后，挂出卖单
                             sell_price = self.eachprice[buy_order["index"] + 1]
                             logger.info(f"准备挂出卖单: 价格={sell_price}, 数量={self.eachgridamount}")
-                            order_result = self.exchange.order(self.COIN, False, self.eachgridamount, sell_price, {"limit": {"tif": "Gtc"}})
+                            order_result = self.exchange.order(self.COIN, False, self.eachgridamount, sell_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
                             logger.info(f"卖单挂单结果: {order_result}")
                             
                             if order_result.get("status") == "ok":
@@ -440,14 +440,14 @@ class GridTrading:
                                     self.pending_orders_to_place.append({
                                         "original_index": buy_order["index"] + 1,
                                         "coin": self.COIN, "is_buy": False, "sz": self.eachgridamount,
-                                        "limit_px": sell_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": False
+                                        "limit_px": sell_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True
                                     })
                             else:
                                 logger.error(f"❌ 卖单补充失败: {order_result}")
                                 self.pending_orders_to_place.append({
                                     "original_index": buy_order["index"] + 1,
                                     "coin": self.COIN, "is_buy": False, "sz": self.eachgridamount,
-                                    "limit_px": sell_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": False
+                                    "limit_px": sell_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True
                                 })
                             
                             self.buy_orders.remove(buy_order)
@@ -515,7 +515,7 @@ class GridTrading:
                             
                             # 做空单成交后，挂出平仓单
                             cover_price = self.eachprice[short_order["index"] - 1]
-                            order_result = self.exchange.order(self.COIN, True, self.eachgridamount, cover_price, {"limit": {"tif": "Gtc"}})
+                            order_result = self.exchange.order(self.COIN, True, self.eachgridamount, cover_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
                             if order_result.get("status") == "ok":
                                 statuses = order_result["response"]["data"].get("statuses", [])
                                 if statuses and "resting" in statuses[0]:
@@ -527,14 +527,14 @@ class GridTrading:
                                     self.pending_orders_to_place.append({
                                         "original_index": short_order["index"] - 1,
                                         "coin": self.COIN, "is_buy": True, "sz": self.eachgridamount,
-                                        "limit_px": cover_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": False
+                                        "limit_px": cover_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True
                                     })
                             else:
                                 logger.error(f"❌ 做空平仓单补充失败: {order_result}")
                                 self.pending_orders_to_place.append({
                                     "original_index": short_order["index"] - 1,
                                     "coin": self.COIN, "is_buy": True, "sz": self.eachgridamount,
-                                    "limit_px": cover_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": False
+                                    "limit_px": cover_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True
                                 })
                             
                             self.short_orders.remove(short_order)
@@ -624,7 +624,8 @@ class GridTrading:
                 order_result = self.exchange.order(
                     order_info["coin"], order_info["is_buy"], 
                     order_info["sz"], order_info["limit_px"], 
-                    order_info["order_type"]
+                    order_info["order_type"],
+                    reduce_only=order_info.get("reduce_only", False)
                 )
                 if order_result.get("status") == "ok":
                     statuses = order_result["response"]["data"].get("statuses", [])
