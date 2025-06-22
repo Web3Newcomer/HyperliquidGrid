@@ -119,17 +119,17 @@ class GridTrading:
             logger.warning(f"WebSocket 订阅 midprice 失败: {e}")
 
     def get_midprice(self):
-        # 优先用 WebSocket 推送的 midprice
-        if self.ws_midprice is not None:
-            return float(self.ws_midprice)
-        # 兜底用 REST API
-        try:
-            all_mids = self.info.all_mids()
-            midprice = all_mids.get(self.COIN, 0.0)
-            return float(midprice) if midprice else 0.0
-        except Exception as e:
-            logger.warning(f"获取midprice异常: {e}")
-            return 0.0
+        """获取当前midprice，优先使用WebSocket数据"""
+        if hasattr(self, 'ws_midprice') and self.ws_midprice is not None:
+            return self.ws_midprice
+        else:
+            try:
+                # 降级到REST API
+                l2_data = self.info.l2_snapshot(self.COIN)
+                return (l2_data['levels'][0][0] + l2_data['levels'][0][1]) / 2
+            except Exception as e:
+                logger.warning(f"获取midprice失败: {e}")
+                return None
 
     def round_to_step(self, price):
         return round(price / self.price_step) * self.price_step
@@ -389,91 +389,17 @@ class GridTrading:
                 else:
                     logger.error(f"❌ Short order failed: {order_result}")
 
-    def _handle_filled_buy_order(self, order_index, buy_price):
-        logger.info(f"处理已成交买单, 网格索引: {order_index}, 价格: {buy_price}")
-        self.stats['buy_count'] += 1
-        self.stats['buy_volume'] += self.eachgridamount
-        self.stats['realized_entry'] = self.stats.get('realized_entry', 0.0) + buy_price * self.eachgridamount
-        
-        # 【修复】移除下单前的持仓检查，以解决因API状态延迟导致无法挂出卖单的问题。
-        # 我们相信 query_order_by_oid 的 'filled' 状态，并直接尝试挂出对应的 reduce_only 卖单。
-        # 如果因状态延迟等原因实际没有持仓，交易所会拒绝这个 reduce_only 订单，这是安全的。
-        
-        sell_price = self.round_to_step(buy_price * (1 + self.tp))
-        
-        # 【重要风控】防止止盈价差过小导致在相同价位开平仓
-        if sell_price <= buy_price:
-            original_sell_price = sell_price
-            sell_price = self.round_to_step(buy_price + self.price_step)
-            logger.error(f"【严重警告】TP值({self.tp})过小，导致计算出的卖价({original_sell_price}) <= 买价({buy_price})。")
-            logger.error(f"为防止亏损，已强制将卖价调整为 {sell_price} (买价 + 一个价格步长)。请调大您的TP值！")
-
-        logger.info(f"为成交的买单挂出对应卖单: 价格={sell_price}, 数量={self.eachgridamount}")
-        order_result = self.exchange.order(self.COIN, False, self.eachgridamount, sell_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
-        if order_result.get("status") == "ok":
-            statuses = order_result["response"]["data"].get("statuses", [])
-            if statuses and "resting" in statuses[0]:
-                oid = statuses[0]["resting"]["oid"]
-                logger.info(f"✅ Sell order placed at {sell_price}, oid: {oid}")
-                self.sell_orders.append({"index": order_index, "oid": oid, "activated": True})
-            else:
-                logger.warning(f"Sell order placement did not result in a resting order: {statuses}")
-                # 即使没有resting，也可能被立即filled或遇到其他情况，统一加入待重试列表确保鲁棒性
-                self.pending_orders_to_place.append({
-                    "original_index": order_index,
-                    "coin": self.COIN, "is_buy": False, "sz": self.eachgridamount,
-                    "limit_px": sell_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True
-                })
-        else:
-            logger.error(f"❌ Sell order补充失败: {order_result}")
-            self.pending_orders_to_place.append({
-                "original_index": order_index,
-                "coin": self.COIN, "is_buy": False, "sz": self.eachgridamount,
-                "limit_px": sell_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True
-            })
-
-    def _handle_filled_short_order(self, order_index, short_price):
-        logger.info(f"处理已成交做空单, 网格索引: {order_index}, 价格: {short_price}")
-        self.stats['short_count'] += 1
-        self.stats['short_volume'] += self.eachgridamount
-        
-        # 【修复】移除下单前的持仓检查
-        cover_price = self.round_to_step(short_price * (1 - self.tp))
-
-        # 【重要风控】防止止盈价差过小导致在相同价位开平仓
-        if cover_price >= short_price:
-            original_cover_price = cover_price
-            cover_price = self.round_to_step(short_price - self.price_step)
-            logger.error(f"【严重警告】TP值({self.tp})过小，导致计算出的平仓买价({original_cover_price}) >= 开仓卖价({short_price})。")
-            logger.error(f"为防止亏损，已强制将平仓买价调整为 {cover_price} (卖价 - 一个价格步长)。请调大您的TP值！")
-
-        logger.info(f"为成交的做空单挂出对应买单: 价格={cover_price}, 数量={self.eachgridamount}")
-        order_result = self.exchange.order(self.COIN, True, self.eachgridamount, cover_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
-        if order_result.get("status") == "ok":
-            statuses = order_result["response"]["data"].get("statuses", [])
-            if statuses and "resting" in statuses[0]:
-                oid = statuses[0]["resting"]["oid"]
-                logger.info(f"✅ Short cover order placed at {cover_price}, oid: {oid}")
-                self.short_cover_orders.append({"index": order_index, "oid": oid, "activated": True})
-            else:
-                logger.warning(f"Short cover placement did not result in a resting order: {statuses}")
-                self.pending_orders_to_place.append({
-                    "original_index": order_index,
-                    "coin": self.COIN, "is_buy": True, "sz": self.eachgridamount,
-                    "limit_px": cover_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True
-                })
-        else:
-            logger.error(f"❌ Short cover order补充失败: {order_result}")
-            self.pending_orders_to_place.append({
-                "original_index": order_index,
-                "coin": self.COIN, "is_buy": True, "sz": self.eachgridamount,
-                "limit_px": cover_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True
-            })
-
     def check_orders(self):
-        if self.check_take_profit_stop_loss():
-            logger.info("已触发止盈/止损，停止策略。"); exit(0)
+        """检查订单状态，处理成交订单"""
+        # 减少API调用频率，避免过多限流警告
+        if not hasattr(self, '_last_check_time'):
+            self._last_check_time = 0
         
+        current_time = time.time()
+        if current_time - self._last_check_time < 2:  # 至少间隔2秒
+            return
+        self._last_check_time = current_time
+
         if self.enable_long_grid:
             for buy_order in self.buy_orders[:]:
                 if buy_order["activated"] and buy_order["oid"] not in self.filled_buy_oids:
@@ -481,11 +407,38 @@ class GridTrading:
                         order_status = self.info.query_order_by_oid(self.address, buy_order["oid"])
                         if order_status.get("order", {}).get("status") == "filled":
                             self.filled_buy_oids.add(buy_order["oid"])
-                            buy_price = self.eachprice[buy_order["index"]]
-                            self._handle_filled_buy_order(buy_order["index"], buy_price)
+                            self.stats['buy_count'] += 1
+                            self.stats['buy_volume'] += self.eachgridamount
+                            self.stats['realized_entry'] += float(order_status['order']['avgPx']) * self.eachgridamount
+                            
+                            # 买单成交后，挂出卖单
+                            sell_price = self.eachprice[buy_order["index"] + 1]
+                            order_result = self.exchange.order(self.COIN, False, self.eachgridamount, sell_price, {"limit": {"tif": "Gtc"}})
+                            if order_result.get("status") == "ok":
+                                statuses = order_result["response"]["data"].get("statuses", [])
+                                if statuses and "resting" in statuses[0]:
+                                    oid = statuses[0]["resting"]["oid"]
+                                    logger.info(f"✅ 买单成交，挂出卖单 价格:{sell_price} oid:{oid}")
+                                    self.sell_orders.append({"index": buy_order["index"] + 1, "oid": oid, "activated": True})
+                                else:
+                                    logger.warning(f"卖单挂出后状态异常: {statuses}")
+                                    self.pending_orders_to_place.append({
+                                        "original_index": buy_order["index"] + 1,
+                                        "coin": self.COIN, "is_buy": False, "sz": self.eachgridamount,
+                                        "limit_px": sell_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": False
+                                    })
+                            else:
+                                logger.error(f"❌ 卖单补充失败: {order_result}")
+                                self.pending_orders_to_place.append({
+                                    "original_index": buy_order["index"] + 1,
+                                    "coin": self.COIN, "is_buy": False, "sz": self.eachgridamount,
+                                    "limit_px": sell_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": False
+                                })
+                            
                             self.buy_orders.remove(buy_order)
+
                     except Exception as e:
-                        logger.warning(f"查询买单状态异常，跳过本次检查: {e}")
+                        logger.warning(f"查询买单状态异常: {e}")
                         continue
             
             for sell_order in self.sell_orders[:]:
@@ -496,25 +449,45 @@ class GridTrading:
                             self.filled_sell_oids.add(sell_order["oid"])
                             self.stats['sell_count'] += 1
                             self.stats['sell_volume'] += self.eachgridamount
-                            buy_price = self.eachprice[sell_order["index"]]
-                            order_result = self.exchange.order(self.COIN, True, self.eachgridamount, buy_price, {"limit": {"tif": "Gtc"}})
+                            
+                            #【修复】卖单成交后，重新挂出买单，并计算已实现盈利
+                            original_buy_price = self.eachprice[sell_order["index"]]
+                            sell_price = float(order_status['order']['avgPx'])
+                            pnl = (sell_price - original_buy_price) * self.eachgridamount
+                            self.stats['realized_pnl'] += pnl
+                            logger.info(f"🎉 网格盈利！卖单成交 价格:{sell_price} 盈利:{pnl:.6f}")
+
+                            logger.info(f"重新挂出买单 价格:{original_buy_price}")
+                            order_result = self.exchange.order(self.COIN, True, self.eachgridamount, original_buy_price, {"limit": {"tif": "Gtc"}})
                             if order_result.get("status") == "ok":
                                 statuses = order_result["response"]["data"].get("statuses", [])
-                                oid = statuses[0].get("resting", {}).get("oid", 0)
-                                logger.info(f"✅ Buy order placed at {buy_price}, oid: {oid}")
-                                self.buy_orders.append({"index": sell_order["index"], "oid": oid, "activated": True})
-                                self.sell_orders.remove(sell_order)
+                                if statuses and "resting" in statuses[0]:
+                                    oid = statuses[0]["resting"]["oid"]
+                                    logger.info(f"✅ 新买单已挂出 oid:{oid}")
+                                    self.buy_orders.append({"index": sell_order["index"], "oid": oid, "activated": True})
+                                else:
+                                    logger.warning(f"新买单挂出后状态异常: {statuses}")
+                                    # 加入待重试列表
+                                    self.pending_orders_to_place.append({
+                                        "original_index": sell_order["index"],
+                                        "coin": self.COIN, "is_buy": True, "sz": self.eachgridamount,
+                                        "limit_px": original_buy_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": False
+                                    })
                             else:
-                                logger.error(f"❌ Buy order补充失败: {order_result}")
+                                logger.error(f"❌ 新买单补充失败: {order_result}")
+                                # 加入待重试列表
                                 self.pending_orders_to_place.append({
                                     "original_index": sell_order["index"],
                                     "coin": self.COIN, "is_buy": True, "sz": self.eachgridamount,
-                                    "limit_px": buy_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": False
+                                    "limit_px": original_buy_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": False
                                 })
-                    except Exception as e:
-                        logger.warning(f"查询卖单状态异常，跳过本次检查: {e}")
-                        continue
+                            
+                            self.sell_orders.remove(sell_order) # 从本地列表中移除已成交的卖单
 
+                    except Exception as e:
+                        logger.warning(f"查询卖单状态异常: {e}")
+                        continue
+            
         if self.enable_short_grid:
             for short_order in self.short_orders[:]:
                 if short_order["activated"] and short_order["oid"] not in self.filled_short_oids:
@@ -522,11 +495,37 @@ class GridTrading:
                         order_status = self.info.query_order_by_oid(self.address, short_order["oid"])
                         if order_status.get("order", {}).get("status") == "filled":
                             self.filled_short_oids.add(short_order["oid"])
-                            short_price = self.eachprice[short_order["index"]]
-                            self._handle_filled_short_order(short_order["index"], short_price)
+                            self.stats['short_count'] += 1
+                            self.stats['short_volume'] += self.eachgridamount
+                            
+                            # 做空单成交后，挂出平仓单
+                            cover_price = self.eachprice[short_order["index"] - 1]
+                            order_result = self.exchange.order(self.COIN, True, self.eachgridamount, cover_price, {"limit": {"tif": "Gtc"}})
+                            if order_result.get("status") == "ok":
+                                statuses = order_result["response"]["data"].get("statuses", [])
+                                if statuses and "resting" in statuses[0]:
+                                    oid = statuses[0]["resting"]["oid"]
+                                    logger.info(f"✅ 做空单成交，挂出平仓单 价格:{cover_price} oid:{oid}")
+                                    self.short_cover_orders.append({"index": short_order["index"] - 1, "oid": oid, "activated": True})
+                                else:
+                                    logger.warning(f"做空平仓单挂出后状态异常: {statuses}")
+                                    self.pending_orders_to_place.append({
+                                        "original_index": short_order["index"] - 1,
+                                        "coin": self.COIN, "is_buy": True, "sz": self.eachgridamount,
+                                        "limit_px": cover_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": False
+                                    })
+                            else:
+                                logger.error(f"❌ 做空平仓单补充失败: {order_result}")
+                                self.pending_orders_to_place.append({
+                                    "original_index": short_order["index"] - 1,
+                                    "coin": self.COIN, "is_buy": True, "sz": self.eachgridamount,
+                                    "limit_px": cover_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": False
+                                })
+                            
                             self.short_orders.remove(short_order)
+
                     except Exception as e:
-                        logger.warning(f"查询做空单状态异常，跳过本次检查: {e}")
+                        logger.warning(f"查询做空单状态异常: {e}")
                         continue
             
             for cover_order in self.short_cover_orders[:]:
@@ -537,79 +536,98 @@ class GridTrading:
                             self.filled_short_cover_oids.add(cover_order["oid"])
                             self.stats['short_cover_count'] += 1
                             self.stats['short_cover_volume'] += self.eachgridamount
-                            short_price = self.eachprice[cover_order["index"]]
-                            order_result = self.exchange.order(self.COIN, False, self.eachgridamount, short_price, {"limit": {"tif": "Gtc"}})
+
+                            #【修复】做空平仓单成交后，重新挂出做空单，并计算已实现盈利
+                            original_short_price = self.eachprice[cover_order["index"]]
+                            cover_price = float(order_status['order']['avgPx'])
+                            pnl = (original_short_price - cover_price) * self.eachgridamount
+                            self.stats['realized_pnl'] += pnl
+                            logger.info(f"🎉 网格盈利！做空平仓单成交 价格:{cover_price} 盈利:{pnl:.6f}")
+                            
+                            logger.info(f"重新挂出做空单 价格:{original_short_price}")
+                            order_result = self.exchange.order(self.COIN, False, self.eachgridamount, original_short_price, {"limit": {"tif": "Gtc"}})
                             if order_result.get("status") == "ok":
                                 statuses = order_result["response"]["data"].get("statuses", [])
-                                oid = statuses[0].get("resting", {}).get("oid", 0)
-                                logger.info(f"✅ Short order placed at {short_price}, oid: {oid}")
-                                self.short_orders.append({"index": cover_order["index"], "oid": oid, "activated": True})
-                                self.short_cover_orders.remove(cover_order)
+                                if statuses and "resting" in statuses[0]:
+                                    oid = statuses[0]["resting"]["oid"]
+                                    logger.info(f"✅ 新做空单已挂出 oid:{oid}")
+                                    self.short_orders.append({"index": cover_order["index"], "oid": oid, "activated": True})
+                                else:
+                                    logger.warning(f"新做空单挂出后状态异常: {statuses}")
+                                    self.pending_orders_to_place.append({
+                                        "original_index": cover_order["index"],
+                                        "coin": self.COIN, "is_buy": False, "sz": self.eachgridamount,
+                                        "limit_px": original_short_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": False
+                                    })
                             else:
-                                logger.error(f"❌ Short order补充失败: {order_result}")
+                                logger.error(f"❌ 新做空单补充失败: {order_result}")
                                 self.pending_orders_to_place.append({
                                     "original_index": cover_order["index"],
                                     "coin": self.COIN, "is_buy": False, "sz": self.eachgridamount,
-                                    "limit_px": short_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": False
+                                    "limit_px": original_short_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": False
                                 })
-                    except Exception as e:
-                        logger.warning(f"查询做空减仓单状态异常，跳过本次检查: {e}")
-                        continue
 
+                            self.short_cover_orders.remove(cover_order) # 从本地列表中移除已成交的平仓单
+
+                    except Exception as e:
+                        logger.warning(f"查询做空减仓单状态异常: {e}")
+                        continue
+    
     def print_stats(self):
-        logger.info("\n===== 交易统计 =====")
-        if self.enable_long_grid:
-            logger.info(f"累计买单成交次数: {int(self.stats['buy_count'])}")
-            logger.info(f"累计卖单成交次数: {int(self.stats['sell_count'])}")
-            logger.info(f"累计买入量: {self.stats['buy_volume']}")
-            logger.info(f"累计卖出量: {self.stats['sell_volume']}")
+        """打印交易统计信息"""
+        logger.info("=" * 50)
+        logger.info("📊 交易统计")
+        logger.info("=" * 50)
+        logger.info(f"买单成交: {self.stats['buy_count']}次 | 卖单成交: {self.stats['sell_count']}次")
+        logger.info(f"买入量: {self.stats['buy_volume']:.4f} | 卖出量: {self.stats['sell_volume']:.4f}")
         if self.enable_short_grid:
-            logger.info(f"累计做空成交次数: {int(self.stats['short_count'])}")
-            logger.info(f"累计做空减仓次数: {int(self.stats['short_cover_count'])}")
-            logger.info(f"累计做空量: {self.stats['short_volume']}")
-            logger.info(f"累计做空减仓量: {self.stats['short_cover_volume']}")
-        logger.info(f"已实现盈利: {self.stats['realized_pnl']:.6f}")
+            logger.info(f"做空成交: {self.stats['short_count']}次 | 平仓成交: {self.stats['short_cover_count']}次")
+            logger.info(f"做空量: {self.stats['short_volume']:.4f} | 平仓量: {self.stats['short_cover_volume']:.4f}")
+        
+        logger.info(f"💰 已实现盈利: {self.stats['realized_pnl']:.6f}")
+        
         # 未实现盈亏估算
         midprice = self.get_midprice()
         holding = self.stats['buy_volume'] - self.stats['sell_volume']
-        self.stats['unrealized_pnl'] = holding * (midprice - self.eachprice[0]) if holding > 0 else 0.0
-        logger.info(f"未实现盈亏: {self.stats['unrealized_pnl']:.6f}")
-        logger.info(f"当前持仓: {holding}")
-        logger.info(f"最新 midprice (WebSocket): {midprice}")
-        logger.info("====================\n")
+        if holding > 0:
+            avg_buy_price = self.stats['realized_entry'] / self.stats['buy_volume'] if self.stats['buy_volume'] > 0 else 0
+            self.stats['unrealized_pnl'] = holding * (midprice - avg_buy_price)
+        else:
+            self.stats['unrealized_pnl'] = 0.0
+        logger.info(f"📈 未实现盈亏: {self.stats['unrealized_pnl']:.6f}")
+        logger.info(f"📦 当前持仓: {holding:.4f} | 最新价格: {midprice}")
+        logger.info("=" * 50)
 
     def _retry_pending_orders(self):
-        # 检查并重试下单失败的补充订单
-        for pending_order in self.pending_orders_to_place[:]:
-            logger.info(f"尝试重下失败的补充订单: {pending_order}")
-            order_result = self.exchange.order(
-                pending_order['coin'],
-                pending_order['is_buy'],
-                pending_order['sz'],
-                pending_order['limit_px'],
-                pending_order['order_type'],
-                reduce_only=pending_order['reduce_only']
-            )
-            if order_result.get("status") == "ok":
-                statuses = order_result["response"]["data"].get("statuses", [])
-                if statuses and "resting" in statuses[0]:
-                    oid = statuses[0]["resting"]["oid"]
-                    logger.info(f"✅ 补充订单重下成功, oid: {oid}")
-                    # 根据订单类型，将其添加到正确的本地列表中
-                    if pending_order['is_buy'] and pending_order['reduce_only']: # 做空平仓单
-                         self.short_cover_orders.append({"index": pending_order["original_index"], "oid": oid, "activated": True})
-                    elif not pending_order['is_buy'] and not pending_order['reduce_only']: # 做空开仓单
-                        self.short_orders.append({"index": pending_order["original_index"], "oid": oid, "activated": True})
-                    elif not pending_order['is_buy'] and pending_order['reduce_only']: # 做多平仓单
-                        self.sell_orders.append({"index": pending_order["original_index"], "oid": oid, "activated": True})
-                    elif pending_order['is_buy'] and not pending_order['reduce_only']: # 做多开仓单
-                        self.buy_orders.append({"index": pending_order["original_index"], "oid": oid, "activated": True})
-                    
-                    self.pending_orders_to_place.remove(pending_order) # 从待办列表中移除
+        """重试失败的订单"""
+        if not self.pending_orders_to_place:
+            return
+        
+        logger.info(f"🔄 重试 {len(self.pending_orders_to_place)} 个失败订单...")
+        for order_info in self.pending_orders_to_place[:]:
+            try:
+                order_result = self.exchange.order(
+                    order_info["coin"], order_info["is_buy"], 
+                    order_info["sz"], order_info["limit_px"], 
+                    order_info["order_type"]
+                )
+                if order_result.get("status") == "ok":
+                    statuses = order_result["response"]["data"].get("statuses", [])
+                    if statuses and "resting" in statuses[0]:
+                        oid = statuses[0]["resting"]["oid"]
+                        logger.info(f"✅ 重试成功 oid:{oid}")
+                        # 根据订单类型添加到对应列表
+                        if order_info["is_buy"]:
+                            self.buy_orders.append({"index": order_info["original_index"], "oid": oid, "activated": True})
+                        else:
+                            self.sell_orders.append({"index": order_info["original_index"], "oid": oid, "activated": True})
+                        self.pending_orders_to_place.remove(order_info)
+                    else:
+                        logger.warning(f"重试订单状态异常: {statuses}")
                 else:
-                    logger.warning(f"补充订单重下后状态异常: {statuses}")
-            else:
-                logger.error(f"❌ 补充订单重下失败: {order_result}")
+                    logger.error(f"❌ 重试失败: {order_result}")
+            except Exception as e:
+                logger.error(f"❌ 重试异常: {e}")
 
     def trader(self):
         self._retry_pending_orders() # 优先处理失败的补充订单
@@ -618,7 +636,7 @@ class GridTrading:
         now = time.time()
         if now - self.stats['last_log_time'] >= 60:
             self.print_stats()
-            self.stats['last_log_time'] = now 
+            self.stats['last_log_time'] = now
 
     def pre_rebalance_risk_check(self):
         """
@@ -640,8 +658,15 @@ class GridTrading:
         """
         try:
             open_orders = self.info.open_orders(self.address)
-            if len(open_orders) < self.gridnum:
-                logger.warning(f"[风控] 挂单数量异常: {len(open_orders)} < 预期{self.gridnum}")
+            expected_orders = self.gridnum # 简化的预期数量
+            if self.enable_long_grid:
+                # 理论上挂单数应约等于网格数，但会有波动
+                expected_orders = len(self.buy_orders) + len(self.sell_orders)
+            elif self.enable_short_grid:
+                expected_orders = len(self.short_orders) + len(self.short_cover_orders)
+
+            if len(open_orders) < expected_orders * 0.8: # 允许20%的偏差
+                logger.warning(f"[风控] 挂单数量异常: {len(open_orders)} < 预期~{expected_orders}")
                 return False
         except Exception as e:
             logger.warning(f"[风控] 查询挂单异常: {e}")
@@ -720,4 +745,54 @@ class GridTrading:
         self.compute()
 
         if not self.post_rebalance_risk_check():
-            logger.warning("[再平衡] 再平衡后风控异常，请人工检查！") 
+            logger.warning("[再平衡] 再平衡后风控异常，请人工检查！")
+
+    def run(self):
+        """运行网格交易策略"""
+        logger.info("🚀 网格交易策略启动")
+        logger.info(f"币种: {self.COIN}")
+        logger.info(f"网格数量: {self.gridnum}")
+        logger.info(f"每格数量: {self.eachgridamount}")
+        logger.info(f"价格区间: {self.eachprice[0]} - {self.eachprice[-1]}")
+        logger.info(f"模式: {'做多' if self.enable_long_grid else ''}{' + 做空' if self.enable_short_grid else ''}")
+        
+        # 初始化统计
+        self.stats = {
+            'buy_count': 0, 'sell_count': 0, 'buy_volume': 0, 'sell_volume': 0,
+            'short_count': 0, 'short_cover_count': 0, 'short_volume': 0, 'short_cover_volume': 0,
+            'realized_pnl': 0, 'unrealized_pnl': 0, 'realized_entry': 0, 'last_log_time': time.time()
+        }
+        
+        # 初始化订单列表
+        self.buy_orders = []
+        self.sell_orders = []
+        self.short_orders = []
+        self.short_cover_orders = []
+        self.filled_buy_oids = set()
+        self.filled_sell_oids = set()
+        self.filled_short_oids = set()
+        self.filled_short_cover_oids = set()
+        self.pending_orders_to_place = []
+        
+        # 计算网格并下单
+        self.compute()
+        
+        # 主循环
+        last_rebalance_time = time.time()
+        while True:
+            try:
+                # 每小时再平衡一次
+                current_time = time.time()
+                if current_time - last_rebalance_time >= 3600:  # 1小时
+                    self.rebalance()
+                    last_rebalance_time = current_time
+                
+                self.trader()
+                time.sleep(1)
+                
+            except KeyboardInterrupt:
+                logger.info("🛑 用户中断，正在安全退出...")
+                break
+            except Exception as e:
+                logger.error(f"❌ 策略运行异常: {e}")
+                time.sleep(5)  # 异常后等待5秒再继续 
