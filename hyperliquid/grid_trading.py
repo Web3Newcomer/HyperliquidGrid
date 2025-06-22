@@ -241,58 +241,88 @@ class GridTrading:
         
         # 第一单以现价成交
         if self.enable_long_grid:
-            logger.info(f"第一单以现价 {midprice} 成交 {self.eachgridamount} {self.COIN}...")
-            order_result = self.exchange.order(self.COIN, True, self.eachgridamount, midprice, {"limit": {"tif": "Ioc"}})
-            if order_result["status"] == "ok":
-                statuses = order_result["response"]["data"]["statuses"]
-                if "filled" in statuses[0]:
-                    filled_price = statuses[0]["filled"]["px"]
-                    filled_sz = statuses[0]["filled"]["sz"]
-                    logger.info(f"✅ 第一单成交成功: 价格={filled_price}, 数量={filled_sz}")
-                    # 立即挂对应的卖单
-                    sell_price = self.round_to_step(filled_price + self.tp)
-                    sell_order_result = self.exchange.order(self.COIN, False, filled_sz, sell_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
-                    if sell_order_result["status"] == "ok":
-                        sell_statuses = sell_order_result["response"]["data"]["statuses"]
-                        if "resting" in sell_statuses[0]:
-                            sell_oid = sell_statuses[0]["resting"]["oid"]
-                            logger.info(f"✅ 对应卖单已挂出: 价格={sell_price}, oid={sell_oid}")
-                            self.sell_orders.append({"index": 0, "oid": sell_oid, "activated": True})
+            try:
+                logger.info(f"第一单以现价 {midprice} 成交 {self.eachgridamount} {self.COIN}...")
+                logger.info(f"第一单参数: COIN={self.COIN}, 数量={self.eachgridamount}, 价格={midprice}, TIF=Ioc")
+                
+                order_result = self.exchange.order(self.COIN, True, self.eachgridamount, midprice, {"limit": {"tif": "Ioc"}})
+                logger.info(f"第一单API响应: {order_result}")
+                
+                if order_result["status"] == "ok":
+                    statuses = order_result["response"]["data"]["statuses"]
+                    logger.info(f"第一单状态: {statuses[0]}")
+                    
+                    if "filled" in statuses[0]:
+                        filled_price = statuses[0]["filled"]["px"]
+                        filled_sz = statuses[0]["filled"]["sz"]
+                        logger.info(f"✅ 第一单成交成功: 价格={filled_price}, 数量={filled_sz}")
+                        # 立即挂对应的卖单
+                        sell_price = self.round_to_step(filled_price + self.tp)
+                        logger.info(f"挂对应卖单: 价格={sell_price}, 数量={filled_sz}")
+                        
+                        sell_order_result = self.exchange.order(self.COIN, False, filled_sz, sell_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
+                        logger.info(f"对应卖单API响应: {sell_order_result}")
+                        
+                        if sell_order_result["status"] == "ok":
+                            sell_statuses = sell_order_result["response"]["data"]["statuses"]
+                            if "resting" in sell_statuses[0]:
+                                sell_oid = sell_statuses[0]["resting"]["oid"]
+                                logger.info(f"✅ 对应卖单已挂出: 价格={sell_price}, oid={sell_oid}")
+                                self.sell_orders.append({"index": 0, "oid": sell_oid, "activated": True})
+                            else:
+                                logger.warning(f"对应卖单状态异常: {sell_statuses[0]}")
                         else:
-                            logger.warning(f"对应卖单状态异常: {sell_statuses[0]}")
+                            logger.error(f"❌ 对应卖单挂出失败: {sell_order_result}")
                     else:
-                        logger.error(f"❌ 对应卖单挂出失败: {sell_order_result}")
+                        logger.warning(f"第一单未成交: {statuses[0]}")
                 else:
-                    logger.warning(f"第一单未成交: {statuses[0]}")
-            else:
-                logger.error(f"❌ 第一单下单失败: {order_result}")
+                    logger.error(f"❌ 第一单下单失败: {order_result}")
+            except Exception as e:
+                logger.error(f"❌ 第一单执行异常: {e}")
+                import traceback
+                logger.error(f"异常堆栈: {traceback.format_exc()}")
         
         if self.enable_short_grid:
-            logger.info(f"第一单以现价 {midprice} 做空 {self.eachgridamount} {self.COIN}...")
-            order_result = self.exchange.order(self.COIN, False, self.eachgridamount, midprice, {"limit": {"tif": "Ioc"}}, reduce_only=False)
-            if order_result["status"] == "ok":
-                statuses = order_result["response"]["data"]["statuses"]
-                if "filled" in statuses[0]:
-                    filled_price = statuses[0]["filled"]["px"]
-                    filled_sz = statuses[0]["filled"]["sz"]
-                    logger.info(f"✅ 第一单做空成交成功: 价格={filled_price}, 数量={filled_sz}")
-                    # 立即挂对应的买单
-                    cover_price = self.round_to_step(filled_price - self.tp)
-                    cover_order_result = self.exchange.order(self.COIN, True, filled_sz, cover_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
-                    if cover_order_result["status"] == "ok":
-                        cover_statuses = cover_order_result["response"]["data"]["statuses"]
-                        if "resting" in cover_statuses[0]:
-                            cover_oid = cover_statuses[0]["resting"]["oid"]
-                            logger.info(f"✅ 对应买单已挂出: 价格={cover_price}, oid={cover_oid}")
-                            self.short_cover_orders.append({"index": 0, "oid": cover_oid, "activated": True})
+            try:
+                logger.info(f"第一单以现价 {midprice} 做空 {self.eachgridamount} {self.COIN}...")
+                logger.info(f"第一单做空参数: COIN={self.COIN}, 数量={self.eachgridamount}, 价格={midprice}, TIF=Ioc")
+                
+                order_result = self.exchange.order(self.COIN, False, self.eachgridamount, midprice, {"limit": {"tif": "Ioc"}}, reduce_only=False)
+                logger.info(f"第一单做空API响应: {order_result}")
+                
+                if order_result["status"] == "ok":
+                    statuses = order_result["response"]["data"]["statuses"]
+                    logger.info(f"第一单做空状态: {statuses[0]}")
+                    
+                    if "filled" in statuses[0]:
+                        filled_price = statuses[0]["filled"]["px"]
+                        filled_sz = statuses[0]["filled"]["sz"]
+                        logger.info(f"✅ 第一单做空成交成功: 价格={filled_price}, 数量={filled_sz}")
+                        # 立即挂对应的买单
+                        cover_price = self.round_to_step(filled_price - self.tp)
+                        logger.info(f"挂对应买单: 价格={cover_price}, 数量={filled_sz}")
+                        
+                        cover_order_result = self.exchange.order(self.COIN, True, filled_sz, cover_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
+                        logger.info(f"对应买单API响应: {cover_order_result}")
+                        
+                        if cover_order_result["status"] == "ok":
+                            cover_statuses = cover_order_result["response"]["data"]["statuses"]
+                            if "resting" in cover_statuses[0]:
+                                cover_oid = cover_statuses[0]["resting"]["oid"]
+                                logger.info(f"✅ 对应买单已挂出: 价格={cover_price}, oid={cover_oid}")
+                                self.short_cover_orders.append({"index": 0, "oid": cover_oid, "activated": True})
+                            else:
+                                logger.warning(f"对应买单状态异常: {cover_statuses[0]}")
                         else:
-                            logger.warning(f"对应买单状态异常: {cover_statuses[0]}")
+                            logger.error(f"❌ 对应买单挂出失败: {cover_order_result}")
                     else:
-                        logger.error(f"❌ 对应买单挂出失败: {cover_order_result}")
+                        logger.warning(f"第一单做空未成交: {statuses[0]}")
                 else:
-                    logger.warning(f"第一单做空未成交: {statuses[0]}")
-            else:
-                logger.error(f"❌ 第一单做空下单失败: {order_result}")
+                    logger.error(f"❌ 第一单做空下单失败: {order_result}")
+            except Exception as e:
+                logger.error(f"❌ 第一单做空执行异常: {e}")
+                import traceback
+                logger.error(f"异常堆栈: {traceback.format_exc()}")
         
         # 初始挂网格单
         if self.enable_long_grid:
