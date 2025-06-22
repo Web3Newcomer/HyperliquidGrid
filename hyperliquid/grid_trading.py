@@ -257,7 +257,7 @@ class GridTrading:
                         filled_sz = statuses[0]["filled"]["sz"]
                         logger.info(f"✅ 第一单成交成功: 价格={filled_price}, 数量={filled_sz}")
                         # 立即挂对应的卖单
-                        sell_price = self.round_to_step(float(filled_price) + self.tp)
+                        sell_price = self.round_to_step(float(filled_price) * (1 + self.tp))
                         
                         # 【重要风控】防止止盈价差过小导致在相同价位开平仓
                         if sell_price <= float(filled_price):
@@ -307,7 +307,7 @@ class GridTrading:
                         filled_sz = statuses[0]["filled"]["sz"]
                         logger.info(f"✅ 第一单做空成交成功: 价格={filled_price}, 数量={filled_sz}")
                         # 立即挂对应的买单
-                        cover_price = self.round_to_step(float(filled_price) - self.tp)
+                        cover_price = self.round_to_step(float(filled_price) * (1 - self.tp))
                         
                         # 【重要风控】防止止盈价差过小导致在相同价位开平仓
                         if cover_price >= float(filled_price):
@@ -387,7 +387,7 @@ class GridTrading:
         self.stats['realized_entry'] = self.stats.get('realized_entry', 0.0) + buy_price * self.eachgridamount
         pos = self.get_position()
         if pos >= self.eachgridamount:
-            sell_price = self.round_to_step(buy_price + self.tp)
+            sell_price = self.round_to_step(buy_price * (1 + self.tp))
             
             # 【重要风控】防止止盈价差过小导致在相同价位开平仓
             if sell_price <= buy_price:
@@ -416,7 +416,7 @@ class GridTrading:
     def _handle_filled_short_order(self, order_index, short_price):
         self.stats['short_count'] += 1
         self.stats['short_volume'] += self.eachgridamount
-        cover_price = self.round_to_step(short_price - self.tp)
+        cover_price = self.round_to_step(short_price * (1 - self.tp))
 
         # 【重要风控】防止止盈价差过小导致在相同价位开平仓
         if cover_price >= short_price:
