@@ -268,6 +268,12 @@ class GridTrading:
                         filled_price = statuses[0]["filled"]["avgPx"]
                         filled_sz = statuses[0]["filled"]["totalSz"]
                         logger.info(f"✅ 第一单成交成功: 价格={filled_price}, 数量={filled_sz}")
+
+                        # 【修复】将第一单的成交信息计入统计
+                        self.stats['buy_count'] += 1
+                        self.stats['buy_volume'] += float(filled_sz)
+                        self.stats['realized_entry'] += float(filled_price) * float(filled_sz)
+                        
                         # 立即挂对应的卖单
                         sell_price = self.round_to_step(float(filled_price) * (1 + self.tp))
                         
@@ -327,6 +333,11 @@ class GridTrading:
                         filled_price = statuses[0]["filled"]["avgPx"]
                         filled_sz = statuses[0]["filled"]["totalSz"]
                         logger.info(f"✅ 第一单做空成交成功: 价格={filled_price}, 数量={filled_sz}")
+
+                        # 【修复】将第一单的成交信息计入统计
+                        self.stats['short_count'] += 1
+                        self.stats['short_volume'] += float(filled_sz)
+                        
                         # 立即挂对应的买单
                         cover_price = self.round_to_step(float(filled_price) * (1 - self.tp))
                         
