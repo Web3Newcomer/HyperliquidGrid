@@ -126,10 +126,9 @@ class GridTrading:
             try:
                 l2_data = self.info.l2_snapshot(self.COIN)
                 levels = l2_data['levels']
-                logger.info(f"l2_data['levels']: {levels}")
-                # 兼容不同结构
-                bid = levels[0][0]
-                ask = levels[0][1]
+                # levels[0] = 买单列表（按价格降序），levels[1] = 卖单列表（按价格升序）
+                bid = levels[0][0]  # 最高买价
+                ask = levels[1][0]  # 最低卖价
                 # 如果是dict，取'px'字段
                 if isinstance(bid, dict):
                     bid = bid.get('px')
@@ -415,7 +414,10 @@ class GridTrading:
                 if buy_order["activated"] and buy_order["oid"] not in self.filled_buy_oids:
                     try:
                         order_status = self.info.query_order_by_oid(self.address, buy_order["oid"])
+                        logger.info(f"检查买单状态: oid={buy_order['oid']}, status={order_status.get('order', {}).get('status')}")
+                        
                         if order_status.get("order", {}).get("status") == "filled":
+                            logger.info(f"🎯 检测到买单成交: oid={buy_order['oid']}, 价格={order_status['order']['avgPx']}")
                             self.filled_buy_oids.add(buy_order["oid"])
                             self.stats['buy_count'] += 1
                             self.stats['buy_volume'] += self.eachgridamount
@@ -423,7 +425,10 @@ class GridTrading:
                             
                             # 买单成交后，挂出卖单
                             sell_price = self.eachprice[buy_order["index"] + 1]
+                            logger.info(f"准备挂出卖单: 价格={sell_price}, 数量={self.eachgridamount}")
                             order_result = self.exchange.order(self.COIN, False, self.eachgridamount, sell_price, {"limit": {"tif": "Gtc"}})
+                            logger.info(f"卖单挂单结果: {order_result}")
+                            
                             if order_result.get("status") == "ok":
                                 statuses = order_result["response"]["data"].get("statuses", [])
                                 if statuses and "resting" in statuses[0]:
