@@ -11,14 +11,14 @@ logger = logging.getLogger(__name__)
 
 
 def setup(base_url=None, skip_ws=False, private_key="", address=""):
-    print("Connecting account...")
+    logger.info("Connecting account...")
     account: LocalAccount = eth_account.Account.from_key(private_key)
     if not address:
         address = account.address
-    print(f"Running with address: {address}")
+    logger.info(f"Running with address: {address}")
     info = Info(base_url, skip_ws)
     spot_user_state = info.spot_user_state(address)
-    print(f"Spot balances: {spot_user_state['balances']}")
+    logger.info(f"Spot balances: {spot_user_state['balances']}")
     if not any(float(b['total']) > 0 for b in spot_user_state["balances"]):
         raise Exception("No spot balance found.")
     exchange = Exchange(account, base_url, account_address=address)
@@ -236,10 +236,65 @@ class GridTrading:
             logger.info(f"自动适配价格步长 price_step={self.price_step}")
             pricestep = (self.gridmax - self.gridmin) / self.gridnum
             self.eachprice = [self.round_to_step(self.gridmin + i * pricestep) for i in range(self.gridnum)]
-        print(f"Grid levels: {self.eachprice}")
-        print(f"Midprice: {midprice}")
+        logger.info(f"Grid levels: {self.eachprice}")
+        logger.info(f"Midprice: {midprice}")
         
-        # 初始挂单
+        # 第一单以现价成交
+        if self.enable_long_grid:
+            logger.info(f"第一单以现价 {midprice} 成交 {self.eachgridamount} {self.COIN}...")
+            order_result = self.exchange.order(self.COIN, True, self.eachgridamount, midprice, {"limit": {"tif": "Ioc"}})
+            if order_result["status"] == "ok":
+                statuses = order_result["response"]["data"]["statuses"]
+                if "filled" in statuses[0]:
+                    filled_price = statuses[0]["filled"]["px"]
+                    filled_sz = statuses[0]["filled"]["sz"]
+                    logger.info(f"✅ 第一单成交成功: 价格={filled_price}, 数量={filled_sz}")
+                    # 立即挂对应的卖单
+                    sell_price = self.round_to_step(filled_price + self.tp)
+                    sell_order_result = self.exchange.order(self.COIN, False, filled_sz, sell_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
+                    if sell_order_result["status"] == "ok":
+                        sell_statuses = sell_order_result["response"]["data"]["statuses"]
+                        if "resting" in sell_statuses[0]:
+                            sell_oid = sell_statuses[0]["resting"]["oid"]
+                            logger.info(f"✅ 对应卖单已挂出: 价格={sell_price}, oid={sell_oid}")
+                            self.sell_orders.append({"index": 0, "oid": sell_oid, "activated": True})
+                        else:
+                            logger.warning(f"对应卖单状态异常: {sell_statuses[0]}")
+                    else:
+                        logger.error(f"❌ 对应卖单挂出失败: {sell_order_result}")
+                else:
+                    logger.warning(f"第一单未成交: {statuses[0]}")
+            else:
+                logger.error(f"❌ 第一单下单失败: {order_result}")
+        
+        if self.enable_short_grid:
+            logger.info(f"第一单以现价 {midprice} 做空 {self.eachgridamount} {self.COIN}...")
+            order_result = self.exchange.order(self.COIN, False, self.eachgridamount, midprice, {"limit": {"tif": "Ioc"}}, reduce_only=False)
+            if order_result["status"] == "ok":
+                statuses = order_result["response"]["data"]["statuses"]
+                if "filled" in statuses[0]:
+                    filled_price = statuses[0]["filled"]["px"]
+                    filled_sz = statuses[0]["filled"]["sz"]
+                    logger.info(f"✅ 第一单做空成交成功: 价格={filled_price}, 数量={filled_sz}")
+                    # 立即挂对应的买单
+                    cover_price = self.round_to_step(filled_price - self.tp)
+                    cover_order_result = self.exchange.order(self.COIN, True, filled_sz, cover_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
+                    if cover_order_result["status"] == "ok":
+                        cover_statuses = cover_order_result["response"]["data"]["statuses"]
+                        if "resting" in cover_statuses[0]:
+                            cover_oid = cover_statuses[0]["resting"]["oid"]
+                            logger.info(f"✅ 对应买单已挂出: 价格={cover_price}, oid={cover_oid}")
+                            self.short_cover_orders.append({"index": 0, "oid": cover_oid, "activated": True})
+                        else:
+                            logger.warning(f"对应买单状态异常: {cover_statuses[0]}")
+                    else:
+                        logger.error(f"❌ 对应买单挂出失败: {cover_order_result}")
+                else:
+                    logger.warning(f"第一单做空未成交: {statuses[0]}")
+            else:
+                logger.error(f"❌ 第一单做空下单失败: {order_result}")
+        
+        # 初始挂网格单
         if self.enable_long_grid:
             logger.info("开始挂做多网格买单...")
             for i, price in enumerate(self.eachprice):
@@ -250,7 +305,7 @@ class GridTrading:
                     statuses = order_result["response"]["data"]["statuses"]
                     if "resting" in statuses[0]:
                         oid = statuses[0]["resting"]["oid"]
-                        print(f"✅ Buy order placed at {price}, oid: {oid}")
+                        logger.info(f"✅ Buy order placed at {price}, oid: {oid}")
                         self.buy_orders.append({"index": i, "oid": oid, "activated": True})
                     elif "filled" in statuses[0]:
                         logger.info(f"Buy order at {price} filled immediately.")
@@ -270,7 +325,7 @@ class GridTrading:
                     statuses = order_result["response"]["data"]["statuses"]
                     if "resting" in statuses[0]:
                         oid = statuses[0]["resting"]["oid"]
-                        print(f"✅ Short order placed at {price}, oid: {oid}")
+                        logger.info(f"✅ Short order placed at {price}, oid: {oid}")
                         self.short_orders.append({"index": i, "oid": oid, "activated": True})
                     elif "filled" in statuses[0]:
                         logger.info(f"Short order at {price} filled immediately.")
@@ -292,7 +347,7 @@ class GridTrading:
                 statuses = order_result["response"]["data"].get("statuses", [])
                 if statuses and "resting" in statuses[0]:
                     oid = statuses[0]["resting"]["oid"]
-                    print(f"✅ Sell order placed at {sell_price}, oid: {oid}")
+                    logger.info(f"✅ Sell order placed at {sell_price}, oid: {oid}")
                     self.sell_orders.append({"index": order_index, "oid": oid, "activated": True})
                 else:
                     logger.warning(f"Sell order placement did not result in a resting order: {statuses}")
@@ -313,7 +368,7 @@ class GridTrading:
             statuses = order_result["response"]["data"].get("statuses", [])
             if statuses and "resting" in statuses[0]:
                 oid = statuses[0]["resting"]["oid"]
-                print(f"✅ Short cover order placed at {cover_price}, oid: {oid}")
+                logger.info(f"✅ Short cover order placed at {cover_price}, oid: {oid}")
                 self.short_cover_orders.append({"index": order_index, "oid": oid, "activated": True})
             else:
                 logger.warning(f"Short cover placement did not result in a resting order: {statuses}")
@@ -356,7 +411,7 @@ class GridTrading:
                             if order_result.get("status") == "ok":
                                 statuses = order_result["response"]["data"].get("statuses", [])
                                 oid = statuses[0].get("resting", {}).get("oid", 0)
-                                print(f"✅ Buy order placed at {buy_price}, oid: {oid}")
+                                logger.info(f"✅ Buy order placed at {buy_price}, oid: {oid}")
                                 self.buy_orders.append({"index": sell_order["index"], "oid": oid, "activated": True})
                                 self.sell_orders.remove(sell_order)
                             else:
@@ -397,7 +452,7 @@ class GridTrading:
                             if order_result.get("status") == "ok":
                                 statuses = order_result["response"]["data"].get("statuses", [])
                                 oid = statuses[0].get("resting", {}).get("oid", 0)
-                                print(f"✅ Short order placed at {short_price}, oid: {oid}")
+                                logger.info(f"✅ Short order placed at {short_price}, oid: {oid}")
                                 self.short_orders.append({"index": cover_order["index"], "oid": oid, "activated": True})
                                 self.short_cover_orders.remove(cover_order)
                             else:
@@ -412,26 +467,26 @@ class GridTrading:
                         continue
 
     def print_stats(self):
-        print("\n===== 交易统计 =====")
+        logger.info("\n===== 交易统计 =====")
         if self.enable_long_grid:
-            print(f"累计买单成交次数: {int(self.stats['buy_count'])}")
-            print(f"累计卖单成交次数: {int(self.stats['sell_count'])}")
-            print(f"累计买入量: {self.stats['buy_volume']}")
-            print(f"累计卖出量: {self.stats['sell_volume']}")
+            logger.info(f"累计买单成交次数: {int(self.stats['buy_count'])}")
+            logger.info(f"累计卖单成交次数: {int(self.stats['sell_count'])}")
+            logger.info(f"累计买入量: {self.stats['buy_volume']}")
+            logger.info(f"累计卖出量: {self.stats['sell_volume']}")
         if self.enable_short_grid:
-            print(f"累计做空成交次数: {int(self.stats['short_count'])}")
-            print(f"累计做空减仓次数: {int(self.stats['short_cover_count'])}")
-            print(f"累计做空量: {self.stats['short_volume']}")
-            print(f"累计做空减仓量: {self.stats['short_cover_volume']}")
-        print(f"已实现盈利: {self.stats['realized_pnl']:.6f}")
+            logger.info(f"累计做空成交次数: {int(self.stats['short_count'])}")
+            logger.info(f"累计做空减仓次数: {int(self.stats['short_cover_count'])}")
+            logger.info(f"累计做空量: {self.stats['short_volume']}")
+            logger.info(f"累计做空减仓量: {self.stats['short_cover_volume']}")
+        logger.info(f"已实现盈利: {self.stats['realized_pnl']:.6f}")
         # 未实现盈亏估算
         midprice = self.get_midprice()
         holding = self.stats['buy_volume'] - self.stats['sell_volume']
         self.stats['unrealized_pnl'] = holding * (midprice - self.eachprice[0]) if holding > 0 else 0.0
-        print(f"未实现盈亏: {self.stats['unrealized_pnl']:.6f}")
-        print(f"当前持仓: {holding}")
-        print(f"最新 midprice (WebSocket): {midprice}")
-        print("====================\n")
+        logger.info(f"未实现盈亏: {self.stats['unrealized_pnl']:.6f}")
+        logger.info(f"当前持仓: {holding}")
+        logger.info(f"最新 midprice (WebSocket): {midprice}")
+        logger.info("====================\n")
 
     def _retry_pending_orders(self):
         # 检查并重试下单失败的补充订单
@@ -449,7 +504,7 @@ class GridTrading:
                 statuses = order_result["response"]["data"].get("statuses", [])
                 if statuses and "resting" in statuses[0]:
                     oid = statuses[0]["resting"]["oid"]
-                    print(f"✅ 补充订单重下成功, oid: {oid}")
+                    logger.info(f"✅ 补充订单重下成功, oid: {oid}")
                     # 根据订单类型，将其添加到正确的本地列表中
                     if pending_order['is_buy'] and pending_order['reduce_only']: # 做空平仓单
                          self.short_cover_orders.append({"index": pending_order["original_index"], "oid": oid, "activated": True})

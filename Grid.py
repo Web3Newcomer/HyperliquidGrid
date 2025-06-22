@@ -12,8 +12,31 @@ CONFIG_PATH = os.path.join(os.path.dirname(__file__), "examples", "config.json")
 GRID_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "grid_config.json")
 # ==================================
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+# 创建logs目录
+logs_dir = os.path.join(os.path.dirname(__file__), "logs")
+if not os.path.exists(logs_dir):
+    os.makedirs(logs_dir)
+
+# 生成日志文件名（包含时间戳）
+log_filename = f"grid_trading_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+log_filepath = os.path.join(logs_dir, log_filename)
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(message)s',
+    handlers=[
+        logging.FileHandler(log_filepath, encoding='utf-8'),  # 文件日志
+        logging.StreamHandler()  # 控制台日志
+    ]
+)
 logger = logging.getLogger(__name__)
+
+# 记录启动信息
+logger.info("=" * 50)
+logger.info("网格交易机器人启动")
+logger.info(f"日志文件: {log_filepath}")
+logger.info("=" * 50)
 
 def load_account_config():
     with open(CONFIG_PATH, "r") as f:
@@ -88,25 +111,25 @@ def main():
             )
             break
         except requests.exceptions.ConnectionError as e:
-            print(f'网络连接失败，正在重试({i+1}/3)...')
+            logger.warning(f'网络连接失败，正在重试({i+1}/3)...')
             time.sleep(3)
     else:
-        print('多次重试后依然无法连接，请检查网络环境或VPN！')
+        logger.error('多次重试后依然无法连接，请检查网络环境或VPN！')
         exit(1)
     all_mids = info.all_mids()
-    print("可用币种如下：")
-    print(list(all_mids.keys()))
+    logger.info("可用币种如下：")
+    logger.info(list(all_mids.keys()))
     if grid_cfg["COIN"] not in all_mids:
-        print(f"错误：你配置的 COIN='{grid_cfg['COIN']}' 不在可用币种中，请修改 grid_config.json 里的 COIN 参数！")
+        logger.error(f"错误：你配置的 COIN='{grid_cfg['COIN']}' 不在可用币种中，请修改 grid_config.json 里的 COIN 参数！")
         return
     user_state = info.user_state(address)
     positions = user_state.get("assetPositions", [])
     if positions:
-        print("Open positions:")
+        logger.info("Open positions:")
         for position in positions:
-            print(json.dumps(position["position"], indent=2))
+            logger.info(json.dumps(position["position"], indent=2))
     else:
-        print("No open positions.")
+        logger.info("No open positions.")
     trading = GridTrading(
         address, info, exchange,
         grid_cfg["COIN"], grid_cfg["GRIDNUM"], grid_cfg["GRIDMAX"], grid_cfg["GRIDMIN"],
