@@ -293,7 +293,12 @@ class GridTrading:
                             else:
                                 logger.warning(f"对应卖单状态异常: {sell_statuses[0]}")
                         else:
-                            logger.error(f"❌ 对应卖单挂出失败: {sell_order_result}")
+                            logger.error(f"❌ 对应卖单挂出失败，加入重试队列: {sell_order_result}")
+                            self.pending_orders_to_place.append({
+                                "original_index": 0, "coin": self.COIN, "is_buy": False, 
+                                "sz": float(filled_sz), "limit_px": sell_price, 
+                                "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True
+                            })
                     else:
                         logger.warning(f"第一单未成交: {statuses[0]}")
                 else:
@@ -347,7 +352,12 @@ class GridTrading:
                             else:
                                 logger.warning(f"对应买单状态异常: {cover_statuses[0]}")
                         else:
-                            logger.error(f"❌ 对应买单挂出失败: {cover_order_result}")
+                            logger.error(f"❌ 对应买单挂出失败，加入重试队列: {cover_order_result}")
+                            self.pending_orders_to_place.append({
+                                "original_index": 0, "coin": self.COIN, "is_buy": True, 
+                                "sz": float(filled_sz), "limit_px": cover_price, 
+                                "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True
+                            })
                     else:
                         logger.warning(f"第一单做空未成交: {statuses[0]}")
                 else:
@@ -371,8 +381,28 @@ class GridTrading:
                         logger.info(f"✅ Buy order placed at {price}, oid: {oid}")
                         self.buy_orders.append({"index": i, "oid": oid, "activated": True})
                     elif "filled" in statuses[0]:
-                        logger.info(f"Buy order at {price} filled immediately.")
-                        self._handle_filled_buy_order(i, price)
+                        logger.info(f"初始买单被立即成交: 价格={price}, 数量={self.eachgridamount}")
+                        # 【修复】内联处理逻辑，替代已删除的函数
+                        self.filled_buy_oids.add(statuses[0]["filled"]["oid"])
+                        self.stats['buy_count'] += 1
+                        self.stats['buy_volume'] += self.eachgridamount
+                        self.stats['realized_entry'] += float(statuses[0]["filled"]["avgPx"]) * self.eachgridamount
+                        
+                        sell_price = self.eachprice[i + 1]
+                        logger.info(f"为立即成交的买单挂出对应卖单: 价格={sell_price}")
+                        sell_order_result = self.exchange.order(self.COIN, False, self.eachgridamount, sell_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
+                        if sell_order_result.get("status") == "ok":
+                            sell_statuses = sell_order_result["response"]["data"].get("statuses", [])
+                            if sell_statuses and "resting" in sell_statuses[0]:
+                                sell_oid = sell_statuses[0]["resting"]["oid"]
+                                logger.info(f"✅ 对应卖单已挂出: oid={sell_oid}")
+                                self.sell_orders.append({"index": i + 1, "oid": sell_oid, "activated": True})
+                            else:
+                                logger.warning(f"对应卖单挂出后状态异常: {sell_statuses}")
+                                self.pending_orders_to_place.append({"original_index": i + 1, "coin": self.COIN, "is_buy": False, "sz": self.eachgridamount, "limit_px": sell_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True})
+                        else:
+                            logger.error(f"❌ 对应卖单挂出失败，加入重试队列: {sell_order_result}")
+                            self.pending_orders_to_place.append({"original_index": i + 1, "coin": self.COIN, "is_buy": False, "sz": self.eachgridamount, "limit_px": sell_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True})
                     else:
                         logger.warning(f"Unknown order status: {statuses[0]}")
                 else:
@@ -391,8 +421,27 @@ class GridTrading:
                         logger.info(f"✅ Short order placed at {price}, oid: {oid}")
                         self.short_orders.append({"index": i, "oid": oid, "activated": True})
                     elif "filled" in statuses[0]:
-                        logger.info(f"Short order at {price} filled immediately.")
-                        self._handle_filled_short_order(i, price)
+                        logger.info(f"初始做空单被立即成交: 价格={price}, 数量={self.eachgridamount}")
+                        # 【修复】内联处理逻辑，替代已删除的函数
+                        self.filled_short_oids.add(statuses[0]["filled"]["oid"])
+                        self.stats['short_count'] += 1
+                        self.stats['short_volume'] += self.eachgridamount
+                        
+                        cover_price = self.eachprice[i - 1]
+                        logger.info(f"为立即成交的做空单挂出对应买单: 价格={cover_price}")
+                        cover_order_result = self.exchange.order(self.COIN, True, self.eachgridamount, cover_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
+                        if cover_order_result.get("status") == "ok":
+                            cover_statuses = cover_order_result["response"]["data"].get("statuses", [])
+                            if cover_statuses and "resting" in cover_statuses[0]:
+                                cover_oid = cover_statuses[0]["resting"]["oid"]
+                                logger.info(f"✅ 对应买单已挂出: oid={cover_oid}")
+                                self.short_cover_orders.append({"index": i - 1, "oid": cover_oid, "activated": True})
+                            else:
+                                logger.warning(f"对应买单挂出后状态异常: {cover_statuses}")
+                                self.pending_orders_to_place.append({"original_index": i - 1, "coin": self.COIN, "is_buy": True, "sz": self.eachgridamount, "limit_px": cover_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True})
+                        else:
+                            logger.error(f"❌ 对应买单挂出失败，加入重试队列: {cover_order_result}")
+                            self.pending_orders_to_place.append({"original_index": i - 1, "coin": self.COIN, "is_buy": True, "sz": self.eachgridamount, "limit_px": cover_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": True})
                     else:
                         logger.warning(f"Unknown order status: {statuses[0]}")
                 else:
@@ -465,8 +514,14 @@ class GridTrading:
                             self.stats['sell_count'] += 1
                             self.stats['sell_volume'] += self.eachgridamount
                             
-                            #【修复】卖单成交后，重新挂出买单，并计算已实现盈利
-                            original_buy_price = self.eachprice[sell_order["index"]]
+                            #【修复】卖单成交后，在低一个网格的位置重新挂出买单
+                            buy_price_index = sell_order["index"] - 1
+                            if buy_price_index < 0:
+                                logger.error(f"无法为卖单 {sell_order['oid']} 在索引 {buy_price_index} 找到对应的买单价格。")
+                                self.sell_orders.remove(sell_order)
+                                continue
+
+                            original_buy_price = self.eachprice[buy_price_index]
                             sell_price = float(order_status['order']['avgPx'])
                             pnl = (sell_price - original_buy_price) * self.eachgridamount
                             self.stats['realized_pnl'] += pnl
@@ -552,8 +607,14 @@ class GridTrading:
                             self.stats['short_cover_count'] += 1
                             self.stats['short_cover_volume'] += self.eachgridamount
 
-                            #【修复】做空平仓单成交后，重新挂出做空单，并计算已实现盈利
-                            original_short_price = self.eachprice[cover_order["index"]]
+                            #【修复】做空平仓单成交后，在高一个网格的位置重新挂出做空单
+                            short_price_index = cover_order["index"] + 1
+                            if short_price_index >= len(self.eachprice):
+                                logger.error(f"无法为平仓单 {cover_order['oid']} 在索引 {short_price_index} 找到对应的做空价格。")
+                                self.short_cover_orders.remove(cover_order)
+                                continue
+
+                            original_short_price = self.eachprice[short_price_index]
                             cover_price = float(order_status['order']['avgPx'])
                             pnl = (original_short_price - cover_price) * self.eachgridamount
                             self.stats['realized_pnl'] += pnl
@@ -569,15 +630,17 @@ class GridTrading:
                                     self.short_orders.append({"index": cover_order["index"], "oid": oid, "activated": True})
                                 else:
                                     logger.warning(f"新做空单挂出后状态异常: {statuses}")
+                                    # 加入待重试列表
                                     self.pending_orders_to_place.append({
-                                        "original_index": cover_order["index"],
+                                        "original_index": short_price_index,
                                         "coin": self.COIN, "is_buy": False, "sz": self.eachgridamount,
                                         "limit_px": original_short_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": False
                                     })
                             else:
                                 logger.error(f"❌ 新做空单补充失败: {order_result}")
+                                # 加入待重试列表
                                 self.pending_orders_to_place.append({
-                                    "original_index": cover_order["index"],
+                                    "original_index": short_price_index,
                                     "coin": self.COIN, "is_buy": False, "sz": self.eachgridamount,
                                     "limit_px": original_short_price, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": False
                                 })
