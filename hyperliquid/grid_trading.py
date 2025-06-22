@@ -257,7 +257,15 @@ class GridTrading:
                         filled_sz = statuses[0]["filled"]["sz"]
                         logger.info(f"✅ 第一单成交成功: 价格={filled_price}, 数量={filled_sz}")
                         # 立即挂对应的卖单
-                        sell_price = self.round_to_step(filled_price + self.tp)
+                        sell_price = self.round_to_step(float(filled_price) + self.tp)
+                        
+                        # 【重要风控】防止止盈价差过小导致在相同价位开平仓
+                        if sell_price <= float(filled_price):
+                            original_sell_price = sell_price
+                            sell_price = self.round_to_step(float(filled_price) + self.price_step)
+                            logger.error(f"【严重警告】TP值({self.tp})过小，导致计算出的卖价({original_sell_price}) <= 买价({filled_price})。")
+                            logger.error(f"为防止亏损，已强制将卖价调整为 {sell_price} (买价 + 一个价格步长)。请调大您的TP值！")
+
                         logger.info(f"挂对应卖单: 价格={sell_price}, 数量={filled_sz}")
                         
                         sell_order_result = self.exchange.order(self.COIN, False, filled_sz, sell_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
@@ -299,7 +307,15 @@ class GridTrading:
                         filled_sz = statuses[0]["filled"]["sz"]
                         logger.info(f"✅ 第一单做空成交成功: 价格={filled_price}, 数量={filled_sz}")
                         # 立即挂对应的买单
-                        cover_price = self.round_to_step(filled_price - self.tp)
+                        cover_price = self.round_to_step(float(filled_price) - self.tp)
+                        
+                        # 【重要风控】防止止盈价差过小导致在相同价位开平仓
+                        if cover_price >= float(filled_price):
+                            original_cover_price = cover_price
+                            cover_price = self.round_to_step(float(filled_price) - self.price_step)
+                            logger.error(f"【严重警告】TP值({self.tp})过小，导致计算出的平仓买价({original_cover_price}) >= 开仓卖价({filled_price})。")
+                            logger.error(f"为防止亏损，已强制将平仓买价调整为 {cover_price} (卖价 - 一个价格步长)。请调大您的TP值！")
+
                         logger.info(f"挂对应买单: 价格={cover_price}, 数量={filled_sz}")
                         
                         cover_order_result = self.exchange.order(self.COIN, True, filled_sz, cover_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
@@ -372,6 +388,14 @@ class GridTrading:
         pos = self.get_position()
         if pos >= self.eachgridamount:
             sell_price = self.round_to_step(buy_price + self.tp)
+            
+            # 【重要风控】防止止盈价差过小导致在相同价位开平仓
+            if sell_price <= buy_price:
+                original_sell_price = sell_price
+                sell_price = self.round_to_step(buy_price + self.price_step)
+                logger.error(f"【严重警告】TP值({self.tp})过小，导致计算出的卖价({original_sell_price}) <= 买价({buy_price})。")
+                logger.error(f"为防止亏损，已强制将卖价调整为 {sell_price} (买价 + 一个价格步长)。请调大您的TP值！")
+
             order_result = self.exchange.order(self.COIN, False, self.eachgridamount, sell_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
             if order_result.get("status") == "ok":
                 statuses = order_result["response"]["data"].get("statuses", [])
@@ -393,6 +417,14 @@ class GridTrading:
         self.stats['short_count'] += 1
         self.stats['short_volume'] += self.eachgridamount
         cover_price = self.round_to_step(short_price - self.tp)
+
+        # 【重要风控】防止止盈价差过小导致在相同价位开平仓
+        if cover_price >= short_price:
+            original_cover_price = cover_price
+            cover_price = self.round_to_step(short_price - self.price_step)
+            logger.error(f"【严重警告】TP值({self.tp})过小，导致计算出的平仓买价({original_cover_price}) >= 开仓卖价({short_price})。")
+            logger.error(f"为防止亏损，已强制将平仓买价调整为 {cover_price} (卖价 - 一个价格步长)。请调大您的TP值！")
+
         order_result = self.exchange.order(self.COIN, True, self.eachgridamount, cover_price, {"limit": {"tif": "Gtc"}}, reduce_only=True)
         if order_result.get("status") == "ok":
             statuses = order_result["response"]["data"].get("statuses", [])
