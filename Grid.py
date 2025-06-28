@@ -119,21 +119,25 @@ def main():
     try:
         logger.info(f"正在检查并取消币种 {grid_cfg['COIN']} 的所有现存挂单...")
         open_orders = info.open_orders(address)
-        orders_to_cancel = [
-            {"coin": o["coin"], "oid": o["oid"]}
-            for o in open_orders
-            if o["coin"] == grid_cfg["COIN"]
-        ]
+        orders_to_cancel = []
+        for o in open_orders:
+            try:
+                if o.get("coin") == grid_cfg["COIN"] and o.get("oid") is not None:
+                    orders_to_cancel.append({"coin": o["coin"], "oid": o["oid"]})
+            except Exception as e:
+                logger.warning(f"跳过异常订单对象: {o}, 错误: {e}")
         if orders_to_cancel:
             logger.warning(f"发现 {len(orders_to_cancel)} 个现存挂单，正在取消...")
-            exchange.bulk_cancel(orders_to_cancel)
-            time.sleep(1) # 等待交易所处理
-            logger.info("所有现存挂单已成功取消。")
+            try:
+                exchange.bulk_cancel(orders_to_cancel)
+                time.sleep(1) # 等待交易所处理
+                logger.info("所有现存挂单已成功取消。")
+            except Exception as e:
+                logger.error(f"批量取消挂单时发生错误: {e}")
         else:
             logger.info("没有发现现存挂单，干净启动。")
     except Exception as e:
         logger.error(f"取消现存挂单时发生错误: {e}。请手动检查交易所。")
-        # 为安全起见，可以选择退出
         # exit(1)
 
     all_mids = info.all_mids()

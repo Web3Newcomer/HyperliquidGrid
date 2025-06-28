@@ -1,0 +1,9 @@
+{
+  "enable_rebalance": false,              
+  "rebalance_interval": 3600,           
+  "max_pos_factor": 2,                 
+  "min_balance_factor": 1.2,         
+  "min_order_ratio": 0.8,            
+  "volatility_window": 60,             
+  "volatility_threshold": 0.01    
+} 

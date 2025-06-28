@@ -14,19 +14,19 @@
 
 ## 快速开始
 1. **克隆项目**
-   ```bash
+```bash
    git clone https://github.com/Web3Newcomer/HyperliquidGrid.git
    cd HyperliquidGrid
    ```
 2. **安装依赖**
-   ```bash
+```bash
    pip install -r requirements.txt
    ```
 3. **配置账户与策略**
    - `examples/config.json`：填写你的私钥和账户地址（注意不要上传到GitHub！）
    - `grid_config.json`：配置币种、网格参数、止盈止损等
 4. **运行机器人**
-   ```bash
+```bash
    python3 Grid.py
    ```
 

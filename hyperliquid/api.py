@@ -7,7 +7,7 @@ import requests
 
 from hyperliquid.utils.constants import MAINNET_API_URL
 from hyperliquid.utils.error import ClientError, ServerError
-from hyperliquid.utils.types import Any
+from typing import Any
 
 # ====== 限流参数 ======
 MAX_CALLS_PER_SECOND = 3
