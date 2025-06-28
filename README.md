@@ -27,7 +27,7 @@
    - `grid_config.json`：配置币种、网格参数、止盈止损等
 4. **运行机器人**
 ```bash
-   python3 Grid.py
+   python Grid.py
    ```
 
 ## 配置说明
